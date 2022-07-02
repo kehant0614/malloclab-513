@@ -573,6 +573,27 @@ static block_t *find_fit(size_t asize) {
 }
 
 /**
+ * @brief Helper function to check heap's prologue and epilogue
+ *
+ * Prologue and epilogue must have size 0 and alloc set to true.
+ *
+ * @param[in] block pointer of type block_t to prologue/epilogue
+ * @return true if block is valid, false otherwise
+ */
+static bool pro_epilogue_check(block_t *block) {
+    if (get_size(block) != 0) {
+        fprintf(stderr, "Error: heap prologue/epilogue wrong size.\n");
+        return false;
+    }
+    if (!get_alloc(block)) {
+        fprintf(stderr, "Error: heap prologue/epilogue wrong alloc flag.\n");
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * @brief Helper function to check block's address is aligned and within
  * boundary.
  *
@@ -596,9 +617,7 @@ static bool addr_check(block_t *block) {
         fprintf(stderr, "Error: Block address is not aligned\n");
         return false;
     }
-
     
-
     return true;
 }
 
@@ -635,11 +654,6 @@ static bool block_ck(block_t *block) {
 
     // check 3.
     word_t *footer = header_to_footer(block);
-    // if (block->header != *footer) {
-    //     fprintf(stderr,
-    //             "Error: Block invalid - header footer size mismatch.\n");
-    //     return false;
-    // }
     if (extract_size(block->header) != extract_size(*footer)) {
         fprintf(stderr,
                 "Error: Block invalid - header footer size mismatch.\n");
@@ -693,40 +707,24 @@ bool mm_checkheap(int line) {
     // 1. check for prologue and epilogue blocks
     block_t *prologue = (block_t *)((char *)mem_heap_lo());
     block_t *epilogue = (block_t *)((char *)mem_heap_hi() - 7);
-    if (get_size(prologue) != 0) {
-        fprintf(stderr, "Error: heap prologue wrong size.\n");
+    if (!pro_epilogue_check(prologue)) {
         return false;
     }
-    if (!get_alloc(prologue)) {
-        fprintf(stderr, "Error: heap prologue wrong alloc flag.\n");
-        return false;
-    }
-    if (get_size(epilogue) != 0) {
-        fprintf(stderr, "Error: heap epilogue wrong size.\n");
-        return false;
-    }
-    if (!get_alloc(epilogue)) {
-        fprintf(stderr, "Error: heap epilogue wrong alloc flag.\n");
+    if (!pro_epilogue_check(epilogue)) {
         return false;
     }
 
-    // 2. check each block's address alignment
     block_t *block;
-
     for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
+        // 2. check each block's address alignment
         if (!addr_check(block)) {
-            fprintf(stderr, "Error: block address not aligned.\n");
+            return false;
+        }
+        // 3. check each block's size, header, and footer
+        if (!block_ck(block)) {
             return false;
         }
     }
-
-    /**
-     *
-     * 3. check each block's header and footer
-     *  a. size is greater than minimum required size
-     *  b. previous/next allocate/free bit consistency
-     *  c. header and footer matching each other
-     */
 
     // 4. check coalescing - no consecutive free blocks in the heap
 
