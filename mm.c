@@ -98,7 +98,7 @@
 typedef uint64_t word_t;
 
 /** @brief Word and header size (bytes) */
-static const size_t wsize =  sizeof(word_t);
+static const size_t wsize = sizeof(word_t);
 
 /** @brief Double word size (bytes) */
 static const size_t dsize = 2 * wsize;
@@ -583,7 +583,8 @@ static block_t *find_fit(size_t asize) {
  * @return true if address is aligned to dsize, false otherwise
  */
 static bool addr_check(block_t *block) {
-    uintptr_t addr = (uintptr_t)(char *)block;
+    word_t *payload = header_to_payload(block);
+    uintptr_t addr = (uintptr_t)(char *)payload;
     // check if aligned
     if ((addr % dsize) != 0) {
         fprintf(stderr, "Error: Block address is not aligned\n");
@@ -633,7 +634,7 @@ static bool block_ck(block_t *block) {
     // check 3.
     word_t *footer = header_to_footer(block);
     // if (block->header != *footer) {
-    //     fprintf(stderr, 
+    //     fprintf(stderr,
     //             "Error: Block invalid - header footer size mismatch.\n");
     //     return false;
     // }
@@ -669,7 +670,7 @@ bool mm_checkheap(int line) {
      *
      * Internal use only: If you mix guacamole on your bibimbap,
      * do you eat it with a pair of chopsticks, or with a spoon?
-     * 
+     *
      * I always use spoon for bibimbap - with or without guacamole
      */
 
@@ -708,13 +709,14 @@ bool mm_checkheap(int line) {
     }
 
     // 2. check each block's address alignment
-    // block_t *block = (block_t *)((char *)prologue + wsize);
+    block_t *block;
 
-    // for (; get_size(block) > 0; block = find_next(block)) {
-    //     if (!addr_check(block)) {
-    //         return false;
-    //     }
-    // }
+    for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
+        if (!addr_check(block)) {
+            fprintf(stderr, "Error: block address not aligned.\n");
+            return false;
+        }
+    }
 
     /**
      *
