@@ -16,7 +16,7 @@
  *
  *************************************************************************
  *
- * @author Your Name <andrewid@andrew.cmu.edu>
+ * @author Taiming Liu <taimingl@andrew.cmu.edu>
  */
 
 #include <assert.h>
@@ -82,11 +82,10 @@
  * I checked.
  *   -zw 2022-07-15
  */
-#define dbg_discard_expr_(expr) \
-    (_Pragma("GCC diagnostic push") \
-     _Pragma("GCC diagnostic ignored \"-Wunused-value\"") \
-     (void) (0 && (expr)) \
-     _Pragma("GCC diagnostic pop"))
+#define dbg_discard_expr_(expr)                                                \
+    (_Pragma("GCC diagnostic push") _Pragma(                                   \
+        "GCC diagnostic ignored \"-Wunused-value\"")(void)(0 && (expr))        \
+         _Pragma("GCC diagnostic pop"))
 #define dbg_requires(expr) dbg_discard_expr_(expr)
 #define dbg_assert(expr) dbg_discard_expr_(expr)
 #define dbg_ensures(expr) dbg_discard_expr_(expr)
@@ -99,7 +98,7 @@
 typedef uint64_t word_t;
 
 /** @brief Word and header size (bytes) */
-static const size_t wsize = sizeof(word_t);
+static const size_t wsize =  sizeof(word_t);
 
 /** @brief Double word size (bytes) */
 static const size_t dsize = 2 * wsize;
@@ -108,18 +107,20 @@ static const size_t dsize = 2 * wsize;
 static const size_t min_block_size = 2 * dsize;
 
 /**
- * TODO: explain what chunksize is
+ * Size of a chunk of memory to be requested from the system
+ * to extend the heap.
  * (Must be divisible by dsize)
  */
 static const size_t chunksize = (1 << 12);
 
 /**
- * TODO: explain what alloc_mask is
+ * Status bit in block header.
+ * 1 - allocated. 0 - free
  */
 static const word_t alloc_mask = 0x1;
 
 /**
- * TODO: explain what size_mask is
+ * Bits in block header masking the size of current block.
  */
 static const word_t size_mask = ~(word_t)0xF;
 
@@ -349,6 +350,11 @@ static void write_epilogue(block_t *block) {
  *
  * TODO: Are there any preconditions or postconditions?
  *
+ * Preconditions:
+ *  1. block start and end addresses should be within the current heap size
+ *  2. size of this new block should be at least more than dsize that is
+ *     required to store header and footer
+ *
  * @param[out] block The location to begin writing the block header
  * @param[in] size The size of the new block
  * @param[in] alloc The allocation status of the new block
@@ -356,6 +362,13 @@ static void write_epilogue(block_t *block) {
 static void write_block(block_t *block, size_t size, bool alloc) {
     dbg_requires(block != NULL);
     dbg_requires(size > 0);
+
+    // ?? - double check correct offset from prologue and epilogue
+    // Conditions
+    dbg_requires((char *)block < (char *)mem_heap_hi() - 7);
+    dbg_requires((char *)block + size > (char *)mem_heap_lo() + 7);
+    dbg_requires(size >= dsize);
+
     block->header = pack(size, alloc);
     word_t *footerp = header_to_footer(block);
     *footerp = pack(size, alloc);
@@ -479,6 +492,12 @@ static block_t *extend_heap(size_t size) {
      * Think about what bp represents. Why do we write the new block
      * starting one word BEFORE bp, but with the same size that we
      * originally requested?
+     *
+     * bp represents the position of break before it was increased by size
+     * by mem_sbrk.
+     * New block starts one word BEFORE bp becaues this one word was the
+     * previous epilogue that's reserverd. Since break moved up, we need to
+     * retract and use the space.
      */
 
     // Initialize free block header/footer
@@ -508,9 +527,16 @@ static block_t *extend_heap(size_t size) {
  */
 static void split_block(block_t *block, size_t asize) {
     dbg_requires(get_alloc(block));
-    /* TODO: Can you write a precondition about the value of asize? */
 
+    /**
+     * asize needs to be bigger than the minimum size required
+     * and smaller than block's current size
+     */
     size_t block_size = get_size(block);
+    dbg_ensures(asize >= min_block_size &&
+                "split_block called without meeting minimum required size");
+    dbg_ensures(asize < block_size &&
+                "split_block called without enough space");
 
     if ((block_size - asize) >= min_block_size) {
         block_t *block_next;
@@ -547,6 +573,85 @@ static block_t *find_fit(size_t asize) {
 }
 
 /**
+ * @brief Helper function to check block's address is aligned and within
+ * boundary.
+ *
+ * An address is aligned in this malloc interface when the address is
+ * multiple of 16 (dsize).
+ *
+ * @param[in] block pointer of type block_t to the address to be checked.
+ * @return true if address is aligned to dsize, false otherwise
+ */
+static bool addr_check(block_t *block) {
+    uintptr_t addr = (uintptr_t)(char *)block;
+    // check if aligned
+    if ((addr % dsize) != 0) {
+        fprintf(stderr, "Error: Block address is not aligned\n");
+        return false;
+    }
+
+    // check if within boundary
+    if (addr < (uintptr_t)mem_heap_lo() || addr > (uintptr_t)mem_heap_hi()) {
+        fprintf(stderr, "Error: Block address is out heap boundaries\n");
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * @brief Helper function to valid a block.
+ *
+ * A valid block on the heap needs to meet below criteria:
+ * - Implicit list
+ *  1. size is greater than minimum size
+ *  2. prev/next allocate/free bit consistency
+ *  3. header and footer match each other
+ * TODO:
+ * - Explicit list
+ *  4. all prev/next pointers are consistency (A's next is B, A is B's prev)
+ *  5. all free blocks are between heap boundaries
+ *  6. count free blocks iteratively and match with free block list
+ *  7. (seglist) all blocks in each list bucket fall within bucket size range
+ *
+ * @param[in] block pointer of type block_t to the address to be checked.
+ * @return true if address is aligned to dsize, false otherwise
+ * @pre The block must not be a boundary tag.
+ */
+static bool block_ck(block_t *block) {
+    // check 1.
+    if (get_size(block) < min_block_size) {
+        fprintf(stderr, "Error: Block invalid - Not enough size\n");
+        return false;
+    }
+
+    // check 2.
+    /**
+     * TODO: Add prev/next check after changing to explicit list
+     */
+
+    // check 3.
+    word_t *footer = header_to_footer(block);
+    // if (block->header != *footer) {
+    //     fprintf(stderr, 
+    //             "Error: Block invalid - header footer size mismatch.\n");
+    //     return false;
+    // }
+    if (extract_size(block->header) != extract_size(*footer)) {
+        fprintf(stderr,
+                "Error: Block invalid - header footer size mismatch.\n");
+        return false;
+    }
+    if (extract_alloc(block->header) != extract_alloc(*footer)) {
+        fprintf(stderr,
+                "Error: Block invalid - header footer alloc mismatch.\n");
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * @brief
  *
  * <What does this function do?>
@@ -559,18 +664,64 @@ static block_t *find_fit(size_t asize) {
  */
 bool mm_checkheap(int line) {
     /*
-     * TODO: Delete this comment!
-     *
-     * You will need to write the heap checker yourself.
-     * Please keep modularity in mind when you're writing the heap checker!
-     *
      * As a filler: one guacamole is equal to 6.02214086 x 10**23 guacas.
      * One might even call it...  the avocado's number.
      *
      * Internal use only: If you mix guacamole on your bibimbap,
      * do you eat it with a pair of chopsticks, or with a spoon?
+     * I always use spoon for bibimbap - with or without guacamole
      */
-    dbg_printf("I did not write a heap checker (called at line %d)\n", line);
+
+    /**
+     * Checking heap with implicit list
+     */
+
+    // 0. check if the heap is initialized
+    block_t *prologue = heap_start;
+    if (prologue == NULL) {
+        fprintf(stderr, "Error: heap is not initialized\n");
+        return false;
+    }
+
+    // 1. check for prologue and epilogue blocks
+    // block_t *epilogue = (block_t *)((char *)mem_heap_hi() - 7);
+    if (get_size(prologue) != wsize) {
+        return false;
+    }
+    // if (!get_alloc(prologue) || get_size(prologue) != 0) {
+    //     return false;
+    // }
+    // if (get_size(prologue) != 0 || get_size(epilogue) != 0) {
+    //     return false;
+    // }
+
+    // 2. check each block's address alignment
+    // block_t *block = (block_t *)((char *)prologue + wsize);
+
+    // for (; get_size(block) > 0; block = find_next(block)) {
+    //     if (!addr_check(block)) {
+    //         return false;
+    //     }
+    // }
+
+    /**
+     *
+     * 3. check each block's header and footer
+     *  a. size is greater than minimum required size
+     *  b. previous/next allocate/free bit consistency
+     *  c. header and footer matching each other
+     */
+
+    // 4. check coalescing - no consecutive free blocks in the heap
+
+    // block_t *block;
+
+    // for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
+    // }
+
+    // dbg_printf("mm_checkheap %zd\n", get_size(block));
+
+    // dbg_printf("I did not write a heap checker (called at line %d)\n", line);
     return true;
 }
 
