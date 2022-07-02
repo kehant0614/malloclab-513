@@ -583,19 +583,21 @@ static block_t *find_fit(size_t asize) {
  * @return true if address is aligned to dsize, false otherwise
  */
 static bool addr_check(block_t *block) {
+    uintptr_t block_addr = (uintptr_t)(char *)block;
+    // check if within boundary
+    if (block_addr < (uintptr_t)mem_heap_lo() || block_addr > (uintptr_t)mem_heap_hi()) {
+        fprintf(stderr, "Error: Block address is out heap boundaries\n");
+        return false;
+    }
     word_t *payload = header_to_payload(block);
-    uintptr_t addr = (uintptr_t)(char *)payload;
+    uintptr_t payload_addr = (uintptr_t)(char *)payload;
     // check if aligned
-    if ((addr % dsize) != 0) {
+    if ((payload_addr % dsize) != 0) {
         fprintf(stderr, "Error: Block address is not aligned\n");
         return false;
     }
 
-    // check if within boundary
-    if (addr < (uintptr_t)mem_heap_lo() || addr > (uintptr_t)mem_heap_hi()) {
-        fprintf(stderr, "Error: Block address is out heap boundaries\n");
-        return false;
-    }
+    
 
     return true;
 }
