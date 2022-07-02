@@ -535,8 +535,8 @@ static void split_block(block_t *block, size_t asize) {
     size_t block_size = get_size(block);
     dbg_ensures(asize >= min_block_size &&
                 "split_block called without meeting minimum required size");
-    dbg_ensures(asize < block_size &&
-                "split_block called without enough space");
+    // dbg_ensures(asize < block_size &&
+    //             "split_block called without enough space");
 
     if ((block_size - asize) >= min_block_size) {
         block_t *block_next;
@@ -669,6 +669,7 @@ bool mm_checkheap(int line) {
      *
      * Internal use only: If you mix guacamole on your bibimbap,
      * do you eat it with a pair of chopsticks, or with a spoon?
+     * 
      * I always use spoon for bibimbap - with or without guacamole
      */
 
@@ -677,23 +678,34 @@ bool mm_checkheap(int line) {
      */
 
     // 0. check if the heap is initialized
-    block_t *prologue = heap_start;
-    if (prologue == NULL) {
+    if (!line) {
+        fprintf(stderr, "Error: line number not provided\n");
+        return false;
+    }
+    if (!heap_start) {
         fprintf(stderr, "Error: heap is not initialized\n");
         return false;
     }
 
     // 1. check for prologue and epilogue blocks
-    // block_t *epilogue = (block_t *)((char *)mem_heap_hi() - 7);
-    if (get_size(prologue) != wsize) {
+    block_t *prologue = (block_t *)((char *)mem_heap_lo());
+    block_t *epilogue = (block_t *)((char *)mem_heap_hi() - 7);
+    if (get_size(prologue) != 0) {
+        fprintf(stderr, "Error: heap prologue wrong size.\n");
         return false;
     }
-    // if (!get_alloc(prologue) || get_size(prologue) != 0) {
-    //     return false;
-    // }
-    // if (get_size(prologue) != 0 || get_size(epilogue) != 0) {
-    //     return false;
-    // }
+    if (!get_alloc(prologue)) {
+        fprintf(stderr, "Error: heap prologue wrong alloc flag.\n");
+        return false;
+    }
+    if (get_size(epilogue) != 0) {
+        fprintf(stderr, "Error: heap epilogue wrong size.\n");
+        return false;
+    }
+    if (!get_alloc(epilogue)) {
+        fprintf(stderr, "Error: heap epilogue wrong alloc flag.\n");
+        return false;
+    }
 
     // 2. check each block's address alignment
     // block_t *block = (block_t *)((char *)prologue + wsize);
