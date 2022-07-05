@@ -124,6 +124,13 @@ static const word_t alloc_mask = 0x1;
  */
 static const word_t size_mask = ~(word_t)0xF;
 
+/**
+ * @brief Represents the pointers to the next/prev free blocks */
+typedef struct fblocks {
+    word_t fnext;
+    word_t fprev;
+} fblocks_t;
+
 /** @brief Represents the header and payload of one block in the heap */
 typedef struct block {
     /** @brief Header contains size + allocation flag */
@@ -149,7 +156,10 @@ typedef struct block {
      * should use a union to alias this zero-length array with another struct,
      * in order to store additional types of data in the payload memory.
      */
-    char payload[0];
+    union {
+        char payload[0];
+        fblocks_t *fblocks;
+    };
 
     /*
      * TODO: delete or replace this comment once you've thought about it.
@@ -257,6 +267,16 @@ static block_t *payload_to_header(void *bp) {
 }
 
 /**
+ * @brief Given a fnext pointer, returns a pointer to the corresponding
+ *        block.
+ * @param[in] fblocks A pointer to a free block's fnext
+ * @return The corresponding block
+ */
+static block_t *fblocks_to_header(fblocks_t *fblocks) {
+    return (block_t *)((char *)fblocks - offsetof(block_t, fblocks));
+}
+
+/**
  * @brief Given a block pointer, returns a pointer to the corresponding
  *        payload.
  * @param[in] block
@@ -266,6 +286,18 @@ static block_t *payload_to_header(void *bp) {
 static void *header_to_payload(block_t *block) {
     dbg_requires(get_size(block) != 0);
     return (void *)(block->payload);
+}
+
+/**
+ * @brief Given a free block pointer, returns a pointer to the corresponding
+ *        fblocks struct.
+ * @param[in] block
+ * @return A pointer to the block's fblocks struct.
+ * @pre The block must be a valid block, not a boundary tag.
+ */
+static fblocks_t *header_to_fblocks(block_t *block) {
+    dbg_requires(get_size(block) != 0);
+    return (fblocks_t *)(block->fblocks);
 }
 
 /**
@@ -348,16 +380,11 @@ static void write_epilogue(block_t *block) {
  * This function writes both a header and footer, where the location of the
  * footer is computed in relation to the header.
  *
- * TODO: Are there any preconditions or postconditions?
- *
- * Preconditions:
- *  1. block start and end addresses should be within the current heap size
- *  2. size of this new block should be at least more than dsize that is
- *     required to store header and footer
- *
  * @param[out] block The location to begin writing the block header
  * @param[in] size The size of the new block
  * @param[in] alloc The allocation status of the new block
+ * @pre The block address needs to be within the heap range. 
+ * @pre The size needs to be at least greater than minimum required size.
  */
 static void write_block(block_t *block, size_t size, bool alloc) {
     dbg_requires(block != NULL);
@@ -389,6 +416,40 @@ static block_t *find_next(block_t *block) {
     dbg_requires(get_size(block) != 0 &&
                  "Called find_next on the last block in the heap");
     return (block_t *)((char *)block + get_size(block));
+}
+
+/**
+ * @brief Finds the next consecutive block on the explicit free list.
+ *
+ * This function accesses the next free block on the heap by following
+ * the fnext pointer stored on current block.
+ *
+ * @param[in] block A block in the heap
+ * @return The next consecutive free block on the heap
+ * @pre The block is not the epilogue
+ */
+static block_t *find_next_fblock(block_t *block) {
+    dbg_requires(block != NULL);
+    dbg_requires(get_size(block) != 0 &&
+                 "Called find_next_fblock on the last block in the heap");
+    return (block_t *)block->fblocks->fnext;
+}
+
+/**
+ * @brief Finds the previous consecutive block on the explicit free list.
+ *
+ * This function accesses the previous free block on the heap by following
+ * the fprev pointer stored on current block.
+ *
+ * @param[in] block A block in the heap
+ * @return The previous consecutive free block on the heap
+ * @pre The block is not the epilogue
+ */
+static block_t *find_prev_fblock(block_t *block) {
+    dbg_requires(block != NULL);
+    dbg_requires(get_size(block) != 0 &&
+                 "Called find_prev_fblock on the last block in the heap");
+    return (block_t *)block->fblocks->fprev;
 }
 
 /**
@@ -606,7 +667,8 @@ static bool pro_epilogue_check(block_t *block) {
 static bool addr_check(block_t *block) {
     uintptr_t block_addr = (uintptr_t)(char *)block;
     // check if within boundary
-    if (block_addr < (uintptr_t)mem_heap_lo() || block_addr > (uintptr_t)mem_heap_hi()) {
+    if (block_addr < (uintptr_t)mem_heap_lo() ||
+        block_addr > (uintptr_t)mem_heap_hi()) {
         fprintf(stderr, "Error: Block address is out heap boundaries\n");
         return false;
     }
@@ -617,7 +679,7 @@ static bool addr_check(block_t *block) {
         fprintf(stderr, "Error: Block address is not aligned\n");
         return false;
     }
-    
+
     return true;
 }
 
@@ -726,16 +788,6 @@ bool mm_checkheap(int line) {
         }
     }
 
-    // 4. check coalescing - no consecutive free blocks in the heap
-
-    // block_t *block;
-
-    // for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
-    // }
-
-    // dbg_printf("mm_checkheap %zd\n", get_size(block));
-
-    // dbg_printf("I did not write a heap checker (called at line %d)\n", line);
     return true;
 }
 
