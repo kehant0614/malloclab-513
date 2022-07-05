@@ -174,6 +174,9 @@ typedef struct block {
 /** @brief Pointer to first block in the heap */
 static block_t *heap_start = NULL;
 
+/** @brief Pointer to lastly referenced free block */
+static block_t *curr_fblock = NULL;
+
 /*
  *****************************************************************************
  * The functions below are short wrapper functions to perform                *
@@ -399,6 +402,15 @@ static void write_block(block_t *block, size_t size, bool alloc) {
     block->header = pack(size, alloc);
     word_t *footerp = header_to_footer(block);
     *footerp = pack(size, alloc);
+
+    // update fblock pointers if this is a free block
+    if (!alloc) {
+        if (curr_fblock == NULL) {
+            curr_fblock = block;
+            // curr_fblock->fblocks->fprev = NULL;
+            // curr_fblock->fblocks->fprev = NULL;
+        }
+    }
 }
 
 /**
