@@ -124,12 +124,17 @@ static const word_t alloc_mask = 0x1;
  */
 static const word_t size_mask = ~(word_t)0xF;
 
-/**
- * @brief Represents the pointers to the next/prev free blocks */
+/** @brief Represents the pointers to the next/prev free blocks */
 typedef struct fblocks {
-    word_t fnext;
-    word_t fprev;
+    struct block *fnext;
+    struct block *fprev;
 } fblocks_t;
+
+/** @brief Union represents the payload or free block pointers */
+union Data {
+    fblocks_t fblocks;
+    char payload[0];
+};
 
 /** @brief Represents the header and payload of one block in the heap */
 typedef struct block {
@@ -156,10 +161,12 @@ typedef struct block {
      * should use a union to alias this zero-length array with another struct,
      * in order to store additional types of data in the payload memory.
      */
-    union {
-        char payload[0];
-        fblocks_t *fblocks;
-    };
+    // union {
+    //     fblocks_t fblocks;
+    //     char payload[0];
+    //     // word_t fblocks[2];
+    // };
+    union Data data;
 
     /*
      * TODO: delete or replace this comment once you've thought about it.
@@ -174,8 +181,12 @@ typedef struct block {
 /** @brief Pointer to first block in the heap */
 static block_t *heap_start = NULL;
 
-/** @brief Pointer to lastly referenced free block */
+/** @brief Pointer to last free block on the explicit free list */
 static block_t *curr_fblock = NULL;
+
+/** @brief unsigned int to keep track the number of free blocks on the explicit
+ *         list */
+static size_t fcount = 0;
 
 /*
  *****************************************************************************
@@ -260,23 +271,44 @@ static size_t get_size(block_t *block) {
 }
 
 /**
+ * @brief Returns the allocation status of a given header value.
+ *
+ * This is based on the lowest bit of the header value.
+ *
+ * @param[in] word
+ * @return The allocation status correpsonding to the word
+ */
+static bool extract_alloc(word_t word) {
+    return (bool)(word & alloc_mask);
+}
+
+/**
+ * @brief Returns the allocation status of a block, based on its header.
+ * @param[in] block
+ * @return The allocation status of the block
+ */
+static bool get_alloc(block_t *block) {
+    return extract_alloc(block->header);
+}
+
+/**
  * @brief Given a payload pointer, returns a pointer to the corresponding
  *        block.
  * @param[in] bp A pointer to a block's payload
  * @return The corresponding block
  */
 static block_t *payload_to_header(void *bp) {
-    return (block_t *)((char *)bp - offsetof(block_t, payload));
+    return (block_t *)((char *)bp - offsetof(block_t, data));
 }
 
 /**
- * @brief Given a fnext pointer, returns a pointer to the corresponding
+ * @brief Given a fblocks pointer, returns a pointer to the corresponding
  *        block.
  * @param[in] fblocks A pointer to a free block's fnext
  * @return The corresponding block
  */
 static block_t *fblocks_to_header(fblocks_t *fblocks) {
-    return (block_t *)((char *)fblocks - offsetof(block_t, fblocks));
+    return (block_t *)((char *)fblocks - offsetof(block_t, data));
 }
 
 /**
@@ -285,10 +317,14 @@ static block_t *fblocks_to_header(fblocks_t *fblocks) {
  * @param[in] block
  * @return A pointer to the block's payload
  * @pre The block must be a valid block, not a boundary tag.
+ * @pre The block must be an allocated block.
  */
 static void *header_to_payload(block_t *block) {
     dbg_requires(get_size(block) != 0);
-    return (void *)(block->payload);
+    // dbg_requires(get_alloc(block));
+    return (void *)&(block->data);
+    // return (void *)(block->data.payload);
+    // return (void *)(block->payload);
 }
 
 /**
@@ -297,10 +333,14 @@ static void *header_to_payload(block_t *block) {
  * @param[in] block
  * @return A pointer to the block's fblocks struct.
  * @pre The block must be a valid block, not a boundary tag.
+ * @pre The block must be a free block.
  */
 static fblocks_t *header_to_fblocks(block_t *block) {
     dbg_requires(get_size(block) != 0);
-    return (fblocks_t *)(block->fblocks);
+    dbg_requires(!get_alloc(block));
+    return (fblocks_t *)&(block->data);
+    // return (fblocks_t *)&(block->data.fblocks);
+    // return (fblocks_t *)(block->fblocks);
 }
 
 /**
@@ -311,9 +351,10 @@ static fblocks_t *header_to_fblocks(block_t *block) {
  * @pre The block must be a valid block, not a boundary tag.
  */
 static word_t *header_to_footer(block_t *block) {
-    dbg_requires(get_size(block) != 0 &&
-                 "Called header_to_footer on the epilogue block");
-    return (word_t *)(block->payload + get_size(block) - dsize);
+    size_t size = get_size(block);
+    dbg_requires(size != 0 && "Called header_to_footer on the epilogue block");
+    // return (word_t *)(block->data.payload + get_size(block) - dsize);
+    return (word_t *)((char *)block + size - wsize);
 }
 
 /**
@@ -336,7 +377,7 @@ static block_t *footer_to_header(word_t *footer) {
  * block's header and footer.
  *
  * @param[in] block
- * @return The size of the block's payload
+ * @return The size of the block's payload.
  */
 static size_t get_payload_size(block_t *block) {
     size_t asize = get_size(block);
@@ -344,32 +385,13 @@ static size_t get_payload_size(block_t *block) {
 }
 
 /**
- * @brief Returns the allocation status of a given header value.
- *
- * This is based on the lowest bit of the header value.
- *
- * @param[in] word
- * @return The allocation status correpsonding to the word
- */
-static bool extract_alloc(word_t word) {
-    return (bool)(word & alloc_mask);
-}
-
-/**
- * @brief Returns the allocation status of a block, based on its header.
- * @param[in] block
- * @return The allocation status of the block
- */
-static bool get_alloc(block_t *block) {
-    return extract_alloc(block->header);
-}
-
-/**
  * @brief Writes an epilogue header at the given address.
  *
  * The epilogue header has size 0, and is marked as allocated.
  *
- * @param[out] block The location to write the epilogue header
+ * @param[out] block The location to write the epilogue header.
+ * @pre block address is not null.
+ * @pre block address is exactly one wsize below heap break point.
  */
 static void write_epilogue(block_t *block) {
     dbg_requires(block != NULL);
@@ -386,7 +408,7 @@ static void write_epilogue(block_t *block) {
  * @param[out] block The location to begin writing the block header
  * @param[in] size The size of the new block
  * @param[in] alloc The allocation status of the new block
- * @pre The block address needs to be within the heap range. 
+ * @pre The block address needs to be within the heap range.
  * @pre The size needs to be at least greater than minimum required size.
  */
 static void write_block(block_t *block, size_t size, bool alloc) {
@@ -404,12 +426,23 @@ static void write_block(block_t *block, size_t size, bool alloc) {
     *footerp = pack(size, alloc);
 
     // update fblock pointers if this is a free block
+    // doubly linked list
     if (!alloc) {
-        if (curr_fblock == NULL) {
-            curr_fblock = block;
-            // curr_fblock->fblocks->fprev = NULL;
-            // curr_fblock->fblocks->fprev = NULL;
+        if (fcount == 1L) {
+            curr_fblock->data.fblocks.fnext = block;
+            curr_fblock->data.fblocks.fprev = block;
+            block->data.fblocks.fnext = curr_fblock;
+            block->data.fblocks.fprev = curr_fblock;
         }
+        if (fcount > 1L) {
+            block_t *temp = curr_fblock->data.fblocks.fnext;
+            curr_fblock->data.fblocks.fnext = block;
+            block->data.fblocks.fprev = curr_fblock;
+            block->data.fblocks.fnext = temp;
+            temp->data.fblocks.fprev = block;
+        }
+        curr_fblock = block;
+        fcount++;
     }
 }
 
@@ -439,12 +472,15 @@ static block_t *find_next(block_t *block) {
  * @param[in] block A block in the heap
  * @return The next consecutive free block on the heap
  * @pre The block is not the epilogue
+ * @pre The block is a free block
  */
 static block_t *find_next_fblock(block_t *block) {
     dbg_requires(block != NULL);
     dbg_requires(get_size(block) != 0 &&
                  "Called find_next_fblock on the last block in the heap");
-    return (block_t *)block->fblocks->fnext;
+    dbg_requires(!get_alloc(block) &&
+                 "Called find_next_fblock on an allocated block");
+    return (block_t *)block->data.fblocks.fnext;
 }
 
 /**
@@ -456,12 +492,15 @@ static block_t *find_next_fblock(block_t *block) {
  * @param[in] block A block in the heap
  * @return The previous consecutive free block on the heap
  * @pre The block is not the epilogue
+ * @pre The block is a free block
  */
 static block_t *find_prev_fblock(block_t *block) {
     dbg_requires(block != NULL);
     dbg_requires(get_size(block) != 0 &&
                  "Called find_prev_fblock on the last block in the heap");
-    return (block_t *)block->fblocks->fprev;
+    dbg_requires(!get_alloc(block) &&
+                 "Called find_prev_fblock on an allocated block");
+    return (block_t *)block->data.fblocks.fprev;
 }
 
 /**
@@ -634,14 +673,24 @@ static void split_block(block_t *block, size_t asize) {
  * @return
  */
 static block_t *find_fit(size_t asize) {
-    block_t *block;
 
-    for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
-
-        if (!(get_alloc(block)) && (asize <= get_size(block))) {
-            return block;
+    if (fcount == 1) {
+        if (asize <= get_size(curr_fblock)) {
+            return curr_fblock;
         }
     }
+    if (fcount > 1) {
+        // starting and ending points of scanning loop
+        block_t *block = (block_t *)curr_fblock->data.fblocks.fnext;
+        uintptr_t stop = (uintptr_t)((char *)curr_fblock->header);
+        while ((uintptr_t)((char *)block->header) != stop) {
+            if (asize <= get_size(block)) {
+                return block;
+            }
+            block = (block_t *)block->data.fblocks.fnext;
+        }
+    }
+
     return NULL; // no fit found
 }
 
@@ -680,18 +729,22 @@ static bool addr_check(block_t *block) {
     uintptr_t block_addr = (uintptr_t)(char *)block;
     // check if within boundary
     if (block_addr < (uintptr_t)mem_heap_lo() ||
-        block_addr > (uintptr_t)mem_heap_hi()) {
+        block_addr > ((uintptr_t)mem_heap_hi() - 7)) {
         fprintf(stderr, "Error: Block address is out heap boundaries\n");
         return false;
     }
-    word_t *payload = header_to_payload(block);
-    uintptr_t payload_addr = (uintptr_t)(char *)payload;
+    uintptr_t data_addr;
+    if (get_alloc(block)) {
+        data_addr = (uintptr_t)((char *)header_to_payload(block));
+    } else {
+        data_addr = (uintptr_t)((char *)header_to_fblocks(block));
+    }
     // check if aligned
-    if ((payload_addr % dsize) != 0) {
+    if ((data_addr % dsize) != 0) {
         fprintf(stderr, "Error: Block address is not aligned\n");
         return false;
     }
-
+    
     return true;
 }
 
