@@ -161,11 +161,6 @@ typedef struct block {
      * should use a union to alias this zero-length array with another struct,
      * in order to store additional types of data in the payload memory.
      */
-    // union {
-    //     fblocks_t fblocks;
-    //     char payload[0];
-    //     // word_t fblocks[2];
-    // };
     union Data data;
 
     /*
@@ -184,9 +179,8 @@ static block_t *heap_start = NULL;
 /** @brief Pointer to last free block on the explicit free list */
 static block_t *curr_fblock = NULL;
 
-/** @brief unsigned int to keep track the number of free blocks on the explicit
- *         list */
-static size_t fcount = 0;
+/** @brief int to count the number of free blocks */
+static int fcount = 0;
 
 /*
  *****************************************************************************
@@ -322,9 +316,9 @@ static block_t *fblocks_to_header(fblocks_t *fblocks) {
 static void *header_to_payload(block_t *block) {
     dbg_requires(get_size(block) != 0);
     // dbg_requires(get_alloc(block));
-    return (void *)&(block->data);
+    // return (void *)&(block->data);
+    return (void *)(block->data.payload);
     // return (void *)(block->data.payload);
-    // return (void *)(block->payload);
 }
 
 /**
@@ -338,9 +332,9 @@ static void *header_to_payload(block_t *block) {
 static fblocks_t *header_to_fblocks(block_t *block) {
     dbg_requires(get_size(block) != 0);
     dbg_requires(!get_alloc(block));
-    return (fblocks_t *)&(block->data);
+    // return (fblocks_t *)&(block->data);
+    return (fblocks_t *)&(block->data.fblocks);
     // return (fblocks_t *)&(block->data.fblocks);
-    // return (fblocks_t *)(block->fblocks);
 }
 
 /**
@@ -400,6 +394,65 @@ static void write_epilogue(block_t *block) {
 }
 
 /**
+ * @brief Add the block to explicit free list
+ *
+ * @param[out] block the block to be added
+ * @pre block address is not null.
+ * @pre a free block
+ */
+static void add_to_flist(block_t *block) {
+    dbg_requires(block != NULL);
+    dbg_requires(!get_alloc(block) &&
+                 "Error: Adding an alloc block to free list");
+
+    if (fcount == 1) {
+        curr_fblock->data.fblocks.fnext = block;
+        curr_fblock->data.fblocks.fprev = block;
+        block->data.fblocks.fnext = curr_fblock;
+        block->data.fblocks.fprev = curr_fblock;
+    }
+    if (fcount > 1) {
+        block_t *temp = curr_fblock->data.fblocks.fnext;
+        curr_fblock->data.fblocks.fnext = block;
+        block->data.fblocks.fprev = curr_fblock;
+        block->data.fblocks.fnext = temp;
+        temp->data.fblocks.fprev = block;
+    }
+    curr_fblock = block;
+    fcount++;
+}
+
+/**
+ * @brief Remove the block from the explicit free list
+ *
+ * @param[out] block the block to be removed
+ * @pre block address is not null.
+ * @pre an alloc block
+ */
+static void remove_from_flist(block_t *block) {
+    dbg_requires(block != NULL);
+    dbg_requires(get_alloc(block) &&
+                 "Error: Removing a free block to free list");
+
+    if (fcount == 0) {
+        return;
+    }
+    if (fcount == 1) {
+        dbg_requires(block == curr_fblock);
+        curr_fblock = NULL;
+    } else {
+        block_t *prev = block->data.fblocks.fprev;
+        block_t *next = block->data.fblocks.fnext;
+        prev->data.fblocks.fnext = next;
+        next->data.fblocks.fprev = prev;
+        if (curr_fblock == block) {
+            curr_fblock = next;
+        }
+    }
+    fcount--;
+}
+
+/**
  * @brief Writes a block starting at the given address.
  *
  * This function writes both a header and footer, where the location of the
@@ -421,28 +474,18 @@ static void write_block(block_t *block, size_t size, bool alloc) {
     dbg_requires((char *)block + size > (char *)mem_heap_lo() + 7);
     dbg_requires(size >= dsize);
 
+    bool alloc_before = get_alloc(block);
     block->header = pack(size, alloc);
     word_t *footerp = header_to_footer(block);
     *footerp = pack(size, alloc);
 
-    // update fblock pointers if this is a free block
-    // doubly linked list
+    // add/remove the block to/from free block list
     if (!alloc) {
-        if (fcount == 1L) {
-            curr_fblock->data.fblocks.fnext = block;
-            curr_fblock->data.fblocks.fprev = block;
-            block->data.fblocks.fnext = curr_fblock;
-            block->data.fblocks.fprev = curr_fblock;
+        add_to_flist(block);
+    } else {
+        if (!alloc_before) {
+            remove_from_flist(block);
         }
-        if (fcount > 1L) {
-            block_t *temp = curr_fblock->data.fblocks.fnext;
-            curr_fblock->data.fblocks.fnext = block;
-            block->data.fblocks.fprev = curr_fblock;
-            block->data.fblocks.fnext = temp;
-            temp->data.fblocks.fprev = block;
-        }
-        curr_fblock = block;
-        fcount++;
     }
 }
 
@@ -480,7 +523,8 @@ static block_t *find_next_fblock(block_t *block) {
                  "Called find_next_fblock on the last block in the heap");
     dbg_requires(!get_alloc(block) &&
                  "Called find_next_fblock on an allocated block");
-    return (block_t *)block->data.fblocks.fnext;
+    // return (block_t *)block->data.fblocks.fnext;
+    return block->data.fblocks.fnext;
 }
 
 /**
@@ -500,7 +544,8 @@ static block_t *find_prev_fblock(block_t *block) {
                  "Called find_prev_fblock on the last block in the heap");
     dbg_requires(!get_alloc(block) &&
                  "Called find_prev_fblock on an allocated block");
-    return (block_t *)block->data.fblocks.fprev;
+    // return (block_t *)block->data.fblocks.fprev;
+    return block->data.fblocks.fprev;
 }
 
 /**
@@ -547,6 +592,49 @@ static block_t *find_prev(block_t *block) {
  */
 
 /******** The remaining content below are helper and debug routines ********/
+
+static void clean_heap() {
+    block_t *block = heap_start;
+    for (; get_size(block) != 0; block = find_next(block)) {
+        block->data.fblocks.fnext = NULL;
+        block->data.fblocks.fprev = NULL;
+        // block->data.payload = NULL;
+        // block->header = NULL;
+    }
+
+    heap_start = NULL;
+}
+
+static void pheap() {
+    if (heap_start != NULL) {
+        printf("--- Heap ---\n");
+        block_t *block;
+        int idx = 0;
+        for (block = heap_start; get_size(block) != 0;
+             block = find_next(block)) {
+            printf("block: %d: %s, size: %zu,   \taddr: %p\n", idx++,
+                   get_alloc(block) ? "a" : "f", get_size(block),
+                   (void *)block);
+        }
+        printf("\n");
+    }
+}
+
+static void pfl() {
+
+    if (fcount > 0) {
+        printf("--- Free List ---\n");
+        int idx = 0;
+        block_t *block = curr_fblock;
+        for (; idx < fcount; idx++) {
+            printf("block: %d: %s, size: %zu,   \taddr: %p\n", idx,
+                       get_alloc(block) ? "a" : "f", get_size(block),
+                       (void *)block);
+            block = find_next_fblock(block);
+        }
+        printf("\n\n\n");
+    }
+}
 
 /**
  * @brief
@@ -674,22 +762,35 @@ static void split_block(block_t *block, size_t asize) {
  */
 static block_t *find_fit(size_t asize) {
 
-    if (fcount == 1) {
-        if (asize <= get_size(curr_fblock)) {
-            return curr_fblock;
+    int idx = 0;
+    block_t *block = curr_fblock;
+    for (; idx < fcount; idx++) {
+        if (asize <= get_size(block)) {
+            return block;
         }
+        block = find_next_fblock(block);
     }
-    if (fcount > 1) {
-        // starting and ending points of scanning loop
-        block_t *block = (block_t *)curr_fblock->data.fblocks.fnext;
-        uintptr_t stop = (uintptr_t)((char *)curr_fblock->header);
-        while ((uintptr_t)((char *)block->header) != stop) {
-            if (asize <= get_size(block)) {
-                return block;
-            }
-            block = (block_t *)block->data.fblocks.fnext;
-        }
-    }
+
+    // if (curr_fblock != NULL) {
+    //     if (curr_fblock->data.fblocks.fnext == NULL ||
+    //         curr_fblock->data.fblocks.fnext == curr_fblock) {
+    //         if (asize <= get_size(curr_fblock)) {
+    //             return curr_fblock;
+    //         }
+    //     } else {
+    //         // starting and ending points of scanning loop
+    //         block_t *block = find_next_fblock(curr_fblock);
+    //         while (block != curr_fblock) {
+    //             if (asize <= get_size(block)) {
+    //                 return block;
+    //             }
+    //             block = find_next_fblock(block);
+    //         }
+    //         if (asize <= get_size(curr_fblock)) {
+    //             return curr_fblock;
+    //         }
+    //     }
+    // }
 
     return NULL; // no fit found
 }
@@ -744,7 +845,7 @@ static bool addr_check(block_t *block) {
         fprintf(stderr, "Error: Block address is not aligned\n");
         return false;
     }
-    
+
     return true;
 }
 
@@ -867,6 +968,19 @@ bool mm_checkheap(int line) {
  * @return
  */
 bool mm_init(void) {
+    // int n = fcount;
+    for (int i = 0; i < fcount; i++) {
+        // block_t *block = find_next_fblock(curr_fblock);
+        curr_fblock = (block_t *)(mem_sbrk(min_block_size));
+        curr_fblock->data.fblocks.fnext = curr_fblock;
+        curr_fblock->data.fblocks.fprev = curr_fblock;
+        // curr_fblock = block;
+    }
+    // curr_fblock = (block_t *)(mem_sbrk(min_block_size));
+    // curr_fblock->data.fblocks.fnext = curr_fblock;
+    // curr_fblock->data.fblocks.fprev = curr_fblock;
+    fcount = 0;
+
     // Create the initial empty heap
     word_t *start = (word_t *)(mem_sbrk(2 * wsize));
 
@@ -953,6 +1067,10 @@ void *malloc(size_t size) {
 
     bp = header_to_payload(block);
 
+    // DEBUG: print heap and free_list 
+    pheap();
+    pfl();
+
     dbg_ensures(mm_checkheap(__LINE__));
     return bp;
 }
@@ -987,6 +1105,10 @@ void free(void *bp) {
     coalesce_block(block);
 
     dbg_ensures(mm_checkheap(__LINE__));
+
+    // DEBUG: print heap and free_list 
+    pheap();
+    pfl();
 }
 
 /**
