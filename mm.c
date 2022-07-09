@@ -315,10 +315,7 @@ static block_t *fblocks_to_header(fblocks_t *fblocks) {
  */
 static void *header_to_payload(block_t *block) {
     dbg_requires(get_size(block) != 0);
-    // dbg_requires(get_alloc(block));
-    // return (void *)&(block->data);
     return (void *)(block->data.payload);
-    // return (void *)(block->data.payload);
 }
 
 /**
@@ -332,9 +329,7 @@ static void *header_to_payload(block_t *block) {
 static fblocks_t *header_to_fblocks(block_t *block) {
     dbg_requires(get_size(block) != 0);
     dbg_requires(!get_alloc(block));
-    // return (fblocks_t *)&(block->data);
     return (fblocks_t *)&(block->data.fblocks);
-    // return (fblocks_t *)&(block->data.fblocks);
 }
 
 /**
@@ -796,27 +791,6 @@ static block_t *find_fit(size_t asize) {
         }
         block = find_next_fblock(block);
     }
-
-    // if (curr_fblock != NULL) {
-    //     if (curr_fblock->data.fblocks.fnext == NULL ||
-    //         curr_fblock->data.fblocks.fnext == curr_fblock) {
-    //         if (asize <= get_size(curr_fblock)) {
-    //             return curr_fblock;
-    //         }
-    //     } else {
-    //         // starting and ending points of scanning loop
-    //         block_t *block = find_next_fblock(curr_fblock);
-    //         while (block != curr_fblock) {
-    //             if (asize <= get_size(block)) {
-    //                 return block;
-    //             }
-    //             block = find_next_fblock(block);
-    //         }
-    //         if (asize <= get_size(curr_fblock)) {
-    //             return curr_fblock;
-    //         }
-    //     }
-    // }
 
     return NULL; // no fit found
 }
