@@ -174,10 +174,10 @@ typedef struct block {
 /* Global variables */
 
 /** @brief Pointer to first block in the heap */
-static block_t *heap_start = NULL;
+static block_t *heap_start;
 
 /** @brief Pointer to last free block on the explicit free list */
-static block_t *curr_fblock = NULL;
+static block_t *curr_fblock;
 
 /** @brief int to count the number of free blocks */
 static int fcount = 0;
@@ -427,12 +427,11 @@ static void add_to_flist(block_t *block) {
  *
  * @param[out] block the block to be removed
  * @pre block address is not null.
- * @pre an alloc block
  */
 static void remove_from_flist(block_t *block) {
     dbg_requires(block != NULL);
-    dbg_requires(get_alloc(block) &&
-                 "Error: Removing a free block to free list");
+    // dbg_requires(get_alloc(block) &&
+    //              "Error: Removing a free block to free list");
 
     if (fcount == 0) {
         return;
@@ -468,7 +467,6 @@ static void write_block(block_t *block, size_t size, bool alloc) {
     dbg_requires(block != NULL);
     dbg_requires(size > 0);
 
-    // ?? - double check correct offset from prologue and epilogue
     // Conditions
     dbg_requires((char *)block < (char *)mem_heap_hi() - 7);
     dbg_requires((char *)block + size > (char *)mem_heap_lo() + 7);
@@ -523,7 +521,6 @@ static block_t *find_next_fblock(block_t *block) {
                  "Called find_next_fblock on the last block in the heap");
     dbg_requires(!get_alloc(block) &&
                  "Called find_next_fblock on an allocated block");
-    // return (block_t *)block->data.fblocks.fnext;
     return block->data.fblocks.fnext;
 }
 
@@ -593,18 +590,6 @@ static block_t *find_prev(block_t *block) {
 
 /******** The remaining content below are helper and debug routines ********/
 
-static void clean_heap() {
-    block_t *block = heap_start;
-    for (; get_size(block) != 0; block = find_next(block)) {
-        block->data.fblocks.fnext = NULL;
-        block->data.fblocks.fprev = NULL;
-        // block->data.payload = NULL;
-        // block->header = NULL;
-    }
-
-    heap_start = NULL;
-}
-
 static void pheap() {
     if (heap_start != NULL) {
         printf("--- Heap ---\n");
@@ -628,8 +613,8 @@ static void pfl() {
         block_t *block = curr_fblock;
         for (; idx < fcount; idx++) {
             printf("block: %d: %s, size: %zu,   \taddr: %p\n", idx,
-                       get_alloc(block) ? "a" : "f", get_size(block),
-                       (void *)block);
+                   get_alloc(block) ? "a" : "f", get_size(block),
+                   (void *)block);
             block = find_next_fblock(block);
         }
         printf("\n\n\n");
@@ -664,6 +649,47 @@ static block_t *coalesce_block(block_t *block) {
      * at the malloc code in CS:APP and K&R, which make heavy use of macros
      * and which we no longer consider to be good style.
      */
+
+    block_t *prev = find_prev(block);
+    block_t *next = find_next(block);
+    int c;
+    if (prev == NULL || get_alloc(prev)) {
+        if (get_alloc(next)) {
+            c = 1;
+        } else {
+            c = 2;
+        }
+    } else {
+        if (get_alloc(next)) {
+            c = 3;
+        } else {
+            c = 4;
+        }
+    }
+
+    if (c > 1) {
+        size_t asize;
+        if (c == 2) {
+            asize = get_size(block) + get_size(next);
+            // remove *next from flist
+            remove_from_flist(next);
+        } else if (c == 3) {
+            asize = get_size(block) + get_size(prev);
+            // remove *block from flist and point to prev
+            remove_from_flist(block);
+            block = prev;
+        } else {
+            asize = get_size(prev) + get_size(block) + get_size(next);
+            // remove *block & *next from flist and point to prev
+            remove_from_flist(block);
+            remove_from_flist(next);
+            block = prev;
+        }
+        block->header = pack(asize, false);
+        word_t *footerp = header_to_footer(block);
+        *footerp = pack(asize, false);
+    }
+
     return block;
 }
 
@@ -968,17 +994,8 @@ bool mm_checkheap(int line) {
  * @return
  */
 bool mm_init(void) {
-    // int n = fcount;
-    for (int i = 0; i < fcount; i++) {
-        // block_t *block = find_next_fblock(curr_fblock);
-        curr_fblock = (block_t *)(mem_sbrk(min_block_size));
-        curr_fblock->data.fblocks.fnext = curr_fblock;
-        curr_fblock->data.fblocks.fprev = curr_fblock;
-        // curr_fblock = block;
-    }
-    // curr_fblock = (block_t *)(mem_sbrk(min_block_size));
-    // curr_fblock->data.fblocks.fnext = curr_fblock;
-    // curr_fblock->data.fblocks.fprev = curr_fblock;
+
+    // reset fcount if modified
     fcount = 0;
 
     // Create the initial empty heap
@@ -1067,9 +1084,9 @@ void *malloc(size_t size) {
 
     bp = header_to_payload(block);
 
-    // DEBUG: print heap and free_list 
-    pheap();
-    pfl();
+    // DEBUG: print heap and free_list
+    // pheap();
+    // pfl();
 
     dbg_ensures(mm_checkheap(__LINE__));
     return bp;
@@ -1106,9 +1123,9 @@ void free(void *bp) {
 
     dbg_ensures(mm_checkheap(__LINE__));
 
-    // DEBUG: print heap and free_list 
-    pheap();
-    pfl();
+    // DEBUG: print heap and free_list
+    // pheap();
+    // pfl();
 }
 
 /**
