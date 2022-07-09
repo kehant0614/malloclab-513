@@ -1059,8 +1059,8 @@ void *malloc(size_t size) {
     bp = header_to_payload(block);
 
     // DEBUG: print heap and free_list
-    // pheap();
-    // pfl();
+    pheap();
+    pfl();
 
     dbg_ensures(mm_checkheap(__LINE__));
     return bp;
@@ -1098,8 +1098,8 @@ void free(void *bp) {
     dbg_ensures(mm_checkheap(__LINE__));
 
     // DEBUG: print heap and free_list
-    // pheap();
-    // pfl();
+    pheap();
+    pfl();
 }
 
 /**
