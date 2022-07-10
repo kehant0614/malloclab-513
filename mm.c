@@ -419,6 +419,25 @@ static void add_to_flist(block_t *block) {
 
     int idx = find_seglist(get_size(block));
 
+    // if (fcounts[idx] == 0) {
+    //     seglist[idx] = block
+    // } 
+    // else if (fcounts[idx] == 1) {
+    //     seglist[idx]->data.fblocks.fnext = block;
+    //     seglist[idx]->data.fblocks.fprev = block;
+    //     block->data.fblocks.fnext = seglist[idx];
+    //     block->data.fblocks.fprev = seglist[idx];
+    // }
+    // else {
+    //     block_t *temp = seglist[idx]->data.fblocks.fnext;
+    //     seglist[idx]->data.fblocks.fnext = block;
+    //     block->data.fblocks.fprev = seglist[idx];
+    //     block->data.fblocks.fnext = temp;
+    //     temp->data.fblocks.fprev = block;
+    // }
+    // seglist[idx] = block;
+    // fcounts[idx]++;
+    
     if (fcounts[idx] == 1) {
         seglist[idx]->data.fblocks.fnext = block;
         seglist[idx]->data.fblocks.fprev = block;
@@ -811,13 +830,16 @@ static void split_block(block_t *block, size_t asize) {
  */
 static block_t *find_fit(size_t asize) {
 
-    int idx = find_seglist(asize);
-    block_t *block = seglist[idx];
-    for (int i = 0; i < fcounts[idx]; i++) {
-        if (asize <= get_size(block)) {
-            return block;
+    for (int idx = find_seglist(asize); idx < LEN; idx++) {
+        block_t *block = seglist[idx];
+        if (fcounts[idx] > 0) {
+            for (int i = 0; i < fcounts[idx]; i++) {
+                if (asize <= get_size(block)) {
+                    return block;
+                }
+                block = find_next_fblock(block);
+            }
         }
-        block = find_next_fblock(block);
     }
 
     return NULL; // no fit found
