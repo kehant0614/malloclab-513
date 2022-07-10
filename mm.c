@@ -676,49 +676,39 @@ static block_t *coalesce_block(block_t *block) {
         return block;
     }
 
-    int c;
-    if (get_alloc(prev)) {
-        if (get_alloc(next)) {
-            c = 1;
-        } else {
-            c = 2;
-        }
+    bool a_prev = get_alloc(prev);
+    bool a_next = get_alloc(next);
+    // case 1: both prev next alloc
+    if (a_prev && a_next) {
+        add_to_flist(block);
     } else {
-        if (get_alloc(next)) {
-            c = 3;
-        } else {
-            c = 4;
-        }
-    }
-
-    if (c > 1) {
-        size_t asize;
-        size_t extra_size;
+        // size_t asize;
         size_t block_size = get_size(block);
-        // remove *block from flist because size changes
-        // remove_from_flist(block);
-        if (c == 2) {
-            extra_size = get_size(next);
+        // case 2: prev alloc; next free
+        if (a_prev && !a_next) {
+            block_size += get_size(next);
             // remove *next from flist
             remove_from_flist(next);
-        } else if (c == 3) {
-            extra_size = get_size(prev);
+        }
+        // case 3: prev free, next alloc
+        else if (!a_prev && a_next) {
+            block_size += get_size(prev);
             // remove *block from flist and point to prev
             remove_from_flist(prev);
             block = prev;
-        } else {
-            extra_size = get_size(prev) + get_size(next);
+        }
+        // case 4: both prev and next free
+        else {
+            block_size += get_size(prev) + get_size(next);
             // remove *next and *prev from flist and point to prev
             remove_from_flist(next);
             remove_from_flist(prev);
             block = prev;
         }
-        asize = block_size + extra_size;
-        block->header = pack(asize, false);
+        // asize = block_size + extra_size;
+        block->header = pack(block_size, false);
         word_t *footerp = header_to_footer(block);
-        *footerp = pack(asize, false);
-        add_to_flist(block);
-    } else {
+        *footerp = pack(block_size, false);
         add_to_flist(block);
     }
 
