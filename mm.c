@@ -111,7 +111,7 @@ static const size_t min_block_size = 2 * dsize;
  * to extend the heap.
  * (Must be divisible by dsize)
  */
-static const size_t chunksize = (1 << 12);
+static const size_t chunksize = (1 << 5);
 
 /**
  * Status bit in block header.
@@ -176,11 +176,14 @@ typedef struct block {
 /** @brief Pointer to first block in the heap */
 static block_t *heap_start;
 
+/** @brief const number of total seglists */
+enum { LEN = 10 };
+
 /** @brief Pointer to last free block on the explicit free list */
-static block_t *curr_fblock;
+static block_t *seglist[LEN];
 
 /** @brief int to count the number of free blocks */
-static int fcount = 0;
+static int fcounts[LEN];
 
 /*
  *****************************************************************************
@@ -388,6 +391,20 @@ static void write_epilogue(block_t *block) {
     block->header = pack(0, true);
 }
 
+static int find_seglist(size_t size) {
+    size_t curr_size = min_block_size;
+    int idx = 0;
+    while (curr_size < size) {
+        curr_size *= 2;
+        if (idx >= LEN - 1) {
+            break;
+        }
+        idx++;
+    }
+
+    return idx;
+}
+
 /**
  * @brief Add the block to explicit free list
  *
@@ -400,21 +417,23 @@ static void add_to_flist(block_t *block) {
     dbg_requires(!get_alloc(block) &&
                  "Error: Adding an alloc block to free list");
 
-    if (fcount == 1) {
-        curr_fblock->data.fblocks.fnext = block;
-        curr_fblock->data.fblocks.fprev = block;
-        block->data.fblocks.fnext = curr_fblock;
-        block->data.fblocks.fprev = curr_fblock;
+    int idx = find_seglist(get_size(block));
+
+    if (fcounts[idx] == 1) {
+        seglist[idx]->data.fblocks.fnext = block;
+        seglist[idx]->data.fblocks.fprev = block;
+        block->data.fblocks.fnext = seglist[idx];
+        block->data.fblocks.fprev = seglist[idx];
     }
-    if (fcount > 1) {
-        block_t *temp = curr_fblock->data.fblocks.fnext;
-        curr_fblock->data.fblocks.fnext = block;
-        block->data.fblocks.fprev = curr_fblock;
+    if (fcounts[idx] > 1) {
+        block_t *temp = seglist[idx]->data.fblocks.fnext;
+        seglist[idx]->data.fblocks.fnext = block;
+        block->data.fblocks.fprev = seglist[idx];
         block->data.fblocks.fnext = temp;
         temp->data.fblocks.fprev = block;
     }
-    curr_fblock = block;
-    fcount++;
+    seglist[idx] = block;
+    fcounts[idx]++;
 }
 
 /**
@@ -425,25 +444,25 @@ static void add_to_flist(block_t *block) {
  */
 static void remove_from_flist(block_t *block) {
     dbg_requires(block != NULL);
-    // dbg_requires(get_alloc(block) &&
-    //              "Error: Removing a free block to free list");
 
-    if (fcount == 0) {
+    int idx = find_seglist(get_size(block));
+
+    if (fcounts[idx] == 0) {
         return;
     }
-    if (fcount == 1) {
-        dbg_requires(block == curr_fblock);
-        curr_fblock = NULL;
+    if (fcounts[idx] == 1) {
+        dbg_requires(block == seglist[idx]);
+        seglist[idx] = NULL;
     } else {
         block_t *prev = block->data.fblocks.fprev;
         block_t *next = block->data.fblocks.fnext;
         prev->data.fblocks.fnext = next;
         next->data.fblocks.fprev = prev;
-        if (curr_fblock == block) {
-            curr_fblock = next;
+        if (seglist[idx] == block) {
+            seglist[idx] = next;
         }
     }
-    fcount--;
+    fcounts[idx]--;
 }
 
 /**
@@ -467,19 +486,19 @@ static void write_block(block_t *block, size_t size, bool alloc) {
     dbg_requires((char *)block + size > (char *)mem_heap_lo() + 7);
     dbg_requires(size >= dsize);
 
-    bool alloc_before = get_alloc(block);
+    // bool alloc_before = get_alloc(block);
     block->header = pack(size, alloc);
     word_t *footerp = header_to_footer(block);
     *footerp = pack(size, alloc);
 
     // add/remove the block to/from free block list
-    if (!alloc) {
-        add_to_flist(block);
-    } else {
-        if (!alloc_before) {
-            remove_from_flist(block);
-        }
-    }
+    // if (!alloc) {
+    //     add_to_flist(block);
+    // } else {
+    //     if (!alloc_before) {
+    //         remove_from_flist(block);
+    //     }
+    // }
 }
 
 /**
@@ -602,18 +621,22 @@ static void pheap() {
 
 static void pfl() {
 
-    if (fcount > 0) {
-        printf("--- Free List ---\n");
-        int idx = 0;
-        block_t *block = curr_fblock;
-        for (; idx < fcount; idx++) {
-            printf("block: %d: %s, size: %zu,   \taddr: %p\n", idx,
-                   get_alloc(block) ? "a" : "f", get_size(block),
-                   (void *)block);
-            block = find_next_fblock(block);
+    int idx = 0;
+
+    for (; idx < LEN; idx++) {
+        if (fcounts[idx] > 0) {
+            printf("--- Free List size: %zu ---\n", min_block_size << idx);
+            block_t *block = seglist[idx];
+            for (int i = 0; i < fcounts[idx]; i++) {
+                printf("block: %d: %s, size: %zu,   \taddr: %p\n", i,
+                       get_alloc(block) ? "a" : "f", get_size(block),
+                       (void *)block);
+                block = find_next_fblock(block);
+            }
+            printf("\n");
         }
-        printf("\n\n\n");
     }
+    printf("\n\n");
 }
 
 /**
@@ -647,8 +670,14 @@ static block_t *coalesce_block(block_t *block) {
 
     block_t *prev = find_prev(block);
     block_t *next = find_next(block);
+
+    if (prev == NULL || next == NULL) {
+        add_to_flist(block);
+        return block;
+    }
+
     int c;
-    if (prev == NULL || get_alloc(prev)) {
+    if (get_alloc(prev)) {
         if (get_alloc(next)) {
             c = 1;
         } else {
@@ -664,25 +693,33 @@ static block_t *coalesce_block(block_t *block) {
 
     if (c > 1) {
         size_t asize;
+        size_t extra_size;
+        size_t block_size = get_size(block);
+        // remove *block from flist because size changes
+        // remove_from_flist(block);
         if (c == 2) {
-            asize = get_size(block) + get_size(next);
+            extra_size = get_size(next);
             // remove *next from flist
             remove_from_flist(next);
         } else if (c == 3) {
-            asize = get_size(block) + get_size(prev);
+            extra_size = get_size(prev);
             // remove *block from flist and point to prev
-            remove_from_flist(block);
+            remove_from_flist(prev);
             block = prev;
         } else {
-            asize = get_size(prev) + get_size(block) + get_size(next);
-            // remove *block & *next from flist and point to prev
-            remove_from_flist(block);
+            extra_size = get_size(prev) + get_size(next);
+            // remove *next and *prev from flist and point to prev
             remove_from_flist(next);
+            remove_from_flist(prev);
             block = prev;
         }
+        asize = block_size + extra_size;
         block->header = pack(asize, false);
         word_t *footerp = header_to_footer(block);
         *footerp = pack(asize, false);
+        add_to_flist(block);
+    } else {
+        add_to_flist(block);
     }
 
     return block;
@@ -765,6 +802,7 @@ static void split_block(block_t *block, size_t asize) {
 
         block_next = find_next(block);
         write_block(block_next, block_size - asize, false);
+        add_to_flist(block_next);
     }
 
     dbg_ensures(get_alloc(block));
@@ -783,9 +821,9 @@ static void split_block(block_t *block, size_t asize) {
  */
 static block_t *find_fit(size_t asize) {
 
-    int idx = 0;
-    block_t *block = curr_fblock;
-    for (; idx < fcount; idx++) {
+    int idx = find_seglist(asize);
+    block_t *block = seglist[idx];
+    for (int i = 0; i < fcounts[idx]; i++) {
         if (asize <= get_size(block)) {
             return block;
         }
@@ -970,7 +1008,9 @@ bool mm_checkheap(int line) {
 bool mm_init(void) {
 
     // reset fcount if modified
-    fcount = 0;
+    for (int i = 0; i < LEN; i++) {
+        fcounts[i] = 0;
+    }
 
     // Create the initial empty heap
     word_t *start = (word_t *)(mem_sbrk(2 * wsize));
@@ -1052,6 +1092,8 @@ void *malloc(size_t size) {
     // Mark block as allocated
     size_t block_size = get_size(block);
     write_block(block, block_size, true);
+
+    remove_from_flist(block);
 
     // Try to split the block if too large
     split_block(block, asize);
