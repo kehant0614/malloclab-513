@@ -111,7 +111,7 @@ static const size_t min_block_size = 2 * dsize;
  * to extend the heap.
  * (Must be divisible by dsize)
  */
-static const size_t chunksize = (1 << 5);
+static const size_t chunksize = (1 << 12);
 
 /**
  * Status bit in block header.
