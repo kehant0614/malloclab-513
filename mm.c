@@ -6,15 +6,6 @@
  *
  * TODO: insert your documentation here. :)
  *
- *************************************************************************
- *
- * ADVICE FOR STUDENTS.
- * - Step 0: Please read the writeup!
- * - Step 1: Write your heap checker.
- * - Step 2: Write contracts / debugging assert statements.
- * - Good luck, and have fun!
- *
- *************************************************************************
  *
  * @author Taiming Liu <taimingl@andrew.cmu.edu>
  */
@@ -143,32 +134,9 @@ typedef struct block {
 
     /**
      * @brief A pointer to the block payload.
-     *
-     * TODO: feel free to delete this comment once you've read it carefully.
-     * We don't know what the size of the payload will be, so we will declare
-     * it as a zero-length array, which is a GNU compiler extension. This will
-     * allow us to obtain a pointer to the start of the payload. (The similar
-     * standard-C feature of "flexible array members" won't work here because
-     * those are not allowed to be members of a union.)
-     *
-     * WARNING: A zero-length array must be the last element in a struct, so
-     * there should not be any struct fields after it. For this lab, we will
-     * allow you to include a zero-length array in a union, as long as the
-     * union is the last field in its containing struct. However, this is
-     * compiler-specific behavior and should be avoided in general.
-     *
-     * WARNING: DO NOT cast this pointer to/from other types! Instead, you
-     * should use a union to alias this zero-length array with another struct,
-     * in order to store additional types of data in the payload memory.
      */
     union Data data;
 
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Why can't we declare the block footer here as part of the struct?
-     * Why do we even have footers -- will the code work fine without them?
-     * which functions actually use the data contained in footers?
-     */
 } block_t;
 
 /* Global variables */
@@ -345,7 +313,6 @@ static fblocks_t *header_to_fblocks(block_t *block) {
 static word_t *header_to_footer(block_t *block) {
     size_t size = get_size(block);
     dbg_requires(size != 0 && "Called header_to_footer on the epilogue block");
-    // return (word_t *)(block->data.payload + get_size(block) - dsize);
     return (word_t *)((char *)block + size - wsize);
 }
 
@@ -391,6 +358,11 @@ static void write_epilogue(block_t *block) {
     block->header = pack(0, true);
 }
 
+/**
+ * @brief Find which seglist a given block belogns to based on size.
+ *
+ * @param[in] size block size used to search
+ */
 static int find_seglist(size_t size) {
     size_t curr_size = min_block_size;
     int idx = 0;
@@ -419,25 +391,6 @@ static void add_to_flist(block_t *block) {
 
     int idx = find_seglist(get_size(block));
 
-    // if (fcounts[idx] == 0) {
-    //     seglist[idx] = block
-    // } 
-    // else if (fcounts[idx] == 1) {
-    //     seglist[idx]->data.fblocks.fnext = block;
-    //     seglist[idx]->data.fblocks.fprev = block;
-    //     block->data.fblocks.fnext = seglist[idx];
-    //     block->data.fblocks.fprev = seglist[idx];
-    // }
-    // else {
-    //     block_t *temp = seglist[idx]->data.fblocks.fnext;
-    //     seglist[idx]->data.fblocks.fnext = block;
-    //     block->data.fblocks.fprev = seglist[idx];
-    //     block->data.fblocks.fnext = temp;
-    //     temp->data.fblocks.fprev = block;
-    // }
-    // seglist[idx] = block;
-    // fcounts[idx]++;
-    
     if (fcounts[idx] == 1) {
         seglist[idx]->data.fblocks.fnext = block;
         seglist[idx]->data.fblocks.fprev = block;
@@ -659,33 +612,16 @@ static void pfl() {
 }
 
 /**
- * @brief
+ * @brief Given a block, coalesce with the block's previous and next
+ *        consecutive blocks if they are free blocks.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] block
- * @return
+ * @param[in] block A pointer to the block
+ * @return A pointer to the block after coalesced with neighboring blocks.
+ * @pre Block must be a free block
  */
 static block_t *coalesce_block(block_t *block) {
-    /*
-     * TODO: delete or replace this comment once you're done.
-     *
-     * Before you start, it will be helpful to review the "Dynamic Memory
-     * Allocation: Basic" lecture, and especially the four coalescing
-     * cases that are described.
-     *
-     * The actual content of the function will probably involve a call to
-     * find_prev(), and multiple calls to write_block(). For examples of how
-     * to use write_block(), take a look at split_block().
-     *
-     * Please do not reference code from prior semesters for this, including
-     * old versions of the 213 website. We also discourage you from looking
-     * at the malloc code in CS:APP and K&R, which make heavy use of macros
-     * and which we no longer consider to be good style.
-     */
+
+    dbg_requires(!get_alloc(block));
 
     block_t *prev = find_prev(block);
     block_t *next = find_next(block);
@@ -735,15 +671,10 @@ static block_t *coalesce_block(block_t *block) {
 }
 
 /**
- * @brief
+ * @brief Extend current heap with given size.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] size
- * @return
+ * @param[in] size size to be extend the heap by.
+ * @return A pointer to a free block equal or greater than the asking size.
  */
 static block_t *extend_heap(size_t size) {
     void *bp;
@@ -753,19 +684,6 @@ static block_t *extend_heap(size_t size) {
     if ((bp = mem_sbrk((intptr_t)size)) == (void *)-1) {
         return NULL;
     }
-
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Think about what bp represents. Why do we write the new block
-     * starting one word BEFORE bp, but with the same size that we
-     * originally requested?
-     *
-     * bp represents the position of break before it was increased by size
-     * by mem_sbrk.
-     * New block starts one word BEFORE bp becaues this one word was the
-     * previous epilogue that's reserverd. Since break moved up, we need to
-     * retract and use the space.
-     */
 
     // Initialize free block header/footer
     block_t *block = payload_to_header(bp);
@@ -782,23 +700,17 @@ static block_t *extend_heap(size_t size) {
 }
 
 /**
- * @brief
+ * @brief Split an allocated block if the block size minus the payload size
+ *        is greater than minimum size required for a free block.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] block
- * @param[in] asize
+ * @param[in] block A pointer to an allocated block to be split.
+ * @param[in] asize The size of block's actual payload size.
+ * @pre block must be an allocated block.
+ * @pre asize itself needs to be meet minimum required size.
  */
 static void split_block(block_t *block, size_t asize) {
     dbg_requires(get_alloc(block));
 
-    /**
-     * asize needs to be bigger than the minimum size required
-     * and smaller than block's current size
-     */
     size_t block_size = get_size(block);
     dbg_ensures(asize >= min_block_size &&
                 "split_block called without meeting minimum required size");
@@ -816,20 +728,17 @@ static void split_block(block_t *block, size_t asize) {
 }
 
 /**
- * @brief
+ * @brief Find a free block equal or bigger than the given size.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] asize
- * @return
+ * @param[in] asize size the free block needs to be at least.
+ * @return Pointer to the found free block, or NULL if not found.
  */
 static block_t *find_fit(size_t asize) {
 
+    // only look for the free block from seglists with bigger size.
     for (int idx = find_seglist(asize); idx < LEN; idx++) {
         block_t *block = seglist[idx];
+        // only if the seglist is not empty
         if (fcounts[idx] > 0) {
             for (int i = 0; i < fcounts[idx]; i++) {
                 if (asize <= get_size(block)) {
@@ -900,11 +809,6 @@ static bool addr_check(block_t *block) {
 /**
  * @brief Helper function to valid a block.
  *
- * A valid block on the heap needs to meet below criteria:
- * - Implicit list
- *  1. size is greater than minimum size
- *  2. prev/next allocate/free bit consistency
- *  3. header and footer match each other
  * TODO:
  * - Explicit list
  *  4. all prev/next pointers are consistency (A's next is B, A is B's prev)
@@ -945,26 +849,14 @@ static bool block_ck(block_t *block) {
 }
 
 /**
- * @brief
+ * @brief Check current heap by checking each block on the heap.
+ *        Check the overall heap's boundaries, prologue, epilogue,
+ *        and each block's address alignment and header footer consistency.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] line
- * @return
+ * @param[in] line line number when the function is called
+ * @return Error message if heap invalid and nothing otherwise.
  */
 bool mm_checkheap(int line) {
-    /*
-     * As a filler: one guacamole is equal to 6.02214086 x 10**23 guacas.
-     * One might even call it...  the avocado's number.
-     *
-     * Internal use only: If you mix guacamole on your bibimbap,
-     * do you eat it with a pair of chopsticks, or with a spoon?
-     *
-     * I always use spoon for bibimbap - with or without guacamole
-     */
 
     /**
      * Checking heap with implicit list
@@ -1006,14 +898,9 @@ bool mm_checkheap(int line) {
 }
 
 /**
- * @brief
+ * @brief Initialize heap with chunksize.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @return
+ * @return True if successfully initialized, false otherwise.
  */
 bool mm_init(void) {
 
@@ -1030,11 +917,9 @@ bool mm_init(void) {
     }
 
     /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Think about why we need a heap prologue and epilogue. Why do
-     * they correspond to a block footer and header respectively?
+     * initialize the prologue and epilogue to track the start and
+     * end of current heap.
      */
-
     start[0] = pack(0, true); // Heap prologue (block footer)
     start[1] = pack(0, true); // Heap epilogue (block header)
 
@@ -1050,15 +935,10 @@ bool mm_init(void) {
 }
 
 /**
- * @brief
+ * @brief Allocate memory on the heap for requested size.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] size
- * @return
+ * @param[in] size size of memory to be allocated.
+ * @return bp pointer to the start address of the allocated space.
  */
 void *malloc(size_t size) {
     dbg_requires(mm_checkheap(__LINE__));
@@ -1119,14 +999,9 @@ void *malloc(size_t size) {
 }
 
 /**
- * @brief
+ * @brief Free allocated space on the heap.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] bp
+ * @param[in] bp the pointer to the start of allocated space.
  */
 void free(void *bp) {
     dbg_requires(mm_checkheap(__LINE__));
@@ -1155,16 +1030,12 @@ void free(void *bp) {
 }
 
 /**
- * @brief
+ * @brief Reallocate the allocated space on the heap to accommodate
+ *        different size than originally allocated.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] ptr
- * @param[in] size
- * @return
+ * @param[in] ptr Pointer to the payload of an already allocated block.
+ * @param[in] size The new size the block needs.
+ * @return Pointer to the start of newly allocated space.
  */
 void *realloc(void *ptr, size_t size) {
     block_t *block = payload_to_header(ptr);
@@ -1204,12 +1075,8 @@ void *realloc(void *ptr, size_t size) {
 }
 
 /**
- * @brief
- *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
+ * @brief Allocated requested space on the heap and initialize
+ *        the space with 0's.
  *
  * @param[in] elements
  * @param[in] size
