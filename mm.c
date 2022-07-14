@@ -802,8 +802,6 @@ static void split_block(block_t *block, size_t asize) {
     size_t block_size = get_size(block);
     dbg_ensures(asize >= min_block_size &&
                 "split_block called without meeting minimum required size");
-    // dbg_ensures(asize < block_size &&
-    //             "split_block called without enough space");
 
     if ((block_size - asize) >= min_block_size) {
         block_t *block_next;
