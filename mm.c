@@ -111,6 +111,12 @@ static const size_t chunksize = (1 << 12);
 static const word_t alloc_mask = 0x1;
 
 /**
+ * Status bit in block header for previous block.
+ * 2 - allocated. 0 - free
+ */
+static const word_t alloc_mask_prev = 0x2;
+
+/**
  * Bits in block header masking the size of current block.
  */
 static const word_t size_mask = ~(word_t)0xF;
@@ -254,6 +260,27 @@ static bool extract_alloc(word_t word) {
  */
 static bool get_alloc(block_t *block) {
     return extract_alloc(block->header);
+}
+
+/**
+ * @brief Returns the allocation status of previous block.
+ *
+ * This is based on the second to the lowest bit on block's header.
+ *
+ * @param[in] word header of the block
+ * @return The allocation status correpsonding to the word
+ */
+static bool extract_alloc_prev(word_t word) {
+    return (bool)(word & alloc_mask_prev);
+}
+
+/**
+ * @brief Returns the allocation status of a block's previous block.
+ * @param[in] block pointer to the block
+ * @return The allocation status of the previous block.
+ */
+static bool get_alloc_prev(block_t *block) {
+    return extract_alloc_prev(block->header);
 }
 
 /**
