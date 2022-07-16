@@ -115,13 +115,13 @@ static const word_t alloc_mask = 0x1;
  * Status bit in block header for previous block.
  * 2 - allocated. 0 - free
  */
-static const word_t prev_alloc_mask = 0x1 << 1;
+static const word_t prev_alloc_mask = 0x2;
 
 /**
  * Flag bit in block header indicating if previous block
  * is a mini block.
  */
-static const word_t prev_mini_mask = 0x1 << 2;
+static const word_t prev_mini_mask = 0x4;
 
 /**
  * Bits in block header masking the size of current block.
@@ -155,7 +155,7 @@ typedef struct block {
 /* Global variables */
 
 /** @brief Pointer to first block in the heap */
-static block_t *heap_start;
+static block_t *heap_start = NULL;
 
 /** @brief const number of total seglists */
 enum { LEN = 3 };
@@ -539,7 +539,8 @@ static void remove_from_flist(block_t *block) {
 //     // }
 // }
 
-static void write_header(block_t *block, size_t size, bool alloc, bool alloc_prev, bool mini_prev) {
+static void write_header(block_t *block, size_t size, bool alloc,
+                         bool alloc_prev, bool mini_prev) {
     dbg_requires(block != NULL);
     // dbg_requires(size > 0);
 
@@ -600,15 +601,16 @@ static block_t *find_next_fmini(block_t *block) {
         return NULL;
     }
 
-    int i = 0;
-    block_t *itr = find_next(block);
-    while (itr && i < fcounts[0]) {
-        if (get_size(itr) <= min_block_size) {
-            return itr;
+    block_t *prev_block = NULL;
+    block_t *itr = seglist[0];
+    while (itr) {
+        if (itr == block) {
+            return prev_block;
         }
+        prev_block = itr;
         itr = find_next(itr);
-        i++;
     }
+    
     return NULL;
 }
 
@@ -687,9 +689,8 @@ static block_t *find_mini_prev(block_t *block) {
  */
 static block_t *find_prev(block_t *block) {
     dbg_requires(block != NULL);
-    dbg_requires(get_size(block) != 0 && 
-                "Called find_prev on prologue");
-                
+    dbg_requires(get_size(block) != 0 && "Called find_prev on prologue");
+
     if (block == NULL || get_size(block) == 0) {
         return NULL;
     }
@@ -724,10 +725,10 @@ static void pheap() {
         for (block = heap_start; get_size(block) != 0;
              block = find_next(block)) {
             word_t *footer = header_to_footer(block);
-            printf("block: %d: %s, size: %zu,   \taddr: %p [footer: %s, size: %zu]\n", idx++,
-                   get_alloc(block) ? "a" : "f", get_size(block),
-                   (void *)block,
-                   extract_alloc(*footer) ? "a" : "f",
+            printf("block: %d: %s, size: %zu,   \taddr: %p [footer: %s, size: "
+                   "%zu]\n",
+                   idx++, get_alloc(block) ? "a" : "f", get_size(block),
+                   (void *)block, extract_alloc(*footer) ? "a" : "f",
                    extract_size(*footer));
         }
         printf("\n");
@@ -812,18 +813,17 @@ static block_t *coalesce_block(block_t *block) {
         // word_t *footerp = header_to_footer(block);
         // *footerp = pack(block_size, false);
         // add_to_flist(block);
-        write_header(block, block_size, false,
-                    get_alloc_prev(block), get_mini_prev(block));
+        write_header(block, block_size, false, get_alloc_prev(block),
+                     get_mini_prev(block));
         write_footer(block, block_size, false);
         add_to_flist(block);
     }
 
     // update the status flags in next block's header
     next = find_next(block);
-    write_header(next, get_size(next), get_alloc(next),
-                false, get_size(block) == min_block_size);
+    write_header(next, get_size(next), get_alloc(next), false,
+                 get_size(block) == min_block_size);
 
-    
     return block;
 }
 
@@ -845,7 +845,8 @@ static block_t *extend_heap(size_t size) {
     // Initialize free block header/footer
     block_t *block = payload_to_header(bp);
     // write_block(block, size, false);
-    write_header(block, size, false, get_alloc_prev(block), get_mini_prev(block));
+    write_header(block, size, false, get_alloc_prev(block),
+                 get_mini_prev(block));
     write_footer(block, size, false);
 
     // Create new epilogue header
@@ -884,21 +885,21 @@ static void split_block(block_t *block, size_t asize) {
         // add_to_flist(block_next);
 
         write_header(block, asize, true, get_alloc_prev(block),
-                    get_mini_prev(block));
+                     get_mini_prev(block));
         block_next = find_next(block);
-        write_header(block_next, block_size - asize, false, 
-                    true, asize == min_block_size);
+        write_header(block_next, block_size - asize, false, true,
+                     asize == min_block_size);
         write_footer(block_next, block_size - asize, false);
         add_to_flist(block_next);
 
         // update status flags in block_next's next block's header
         block_next = find_next(block_next);
         write_header(block_next, get_size(block_next), get_alloc(block_next),
-                    false, block_size - asize == min_block_size);
+                     false, block_size - asize == min_block_size);
     } else {
         block_next = find_next(block);
         write_header(block_next, get_size(block_next), get_alloc(block_next),
-                    true, true);
+                     true, true);
     }
 
     dbg_ensures(get_alloc(block));
@@ -1164,8 +1165,8 @@ void *malloc(size_t size) {
     // Mark block as allocated
     size_t block_size = get_size(block);
     // write_block(block, block_size, true);
-    write_header(block, block_size, true, 
-                get_alloc_prev(block), get_mini_prev(block));
+    write_header(block, block_size, true, get_alloc_prev(block),
+                 get_mini_prev(block));
 
     remove_from_flist(block);
 
@@ -1202,7 +1203,8 @@ void free(void *bp) {
 
     // Mark the block as free
     // write_block(block, size, false);
-    write_header(block, size, false, get_alloc_prev(block), get_mini_prev(block));
+    write_header(block, size, false, get_alloc_prev(block),
+                 get_mini_prev(block));
     write_footer(block, size, false);
 
     // Try to coalesce the block with its neighbors
@@ -1224,10 +1226,6 @@ void free(void *bp) {
  * @return Pointer to the start of newly allocated space.
  */
 void *realloc(void *ptr, size_t size) {
-    block_t *block = payload_to_header(ptr);
-    size_t copysize;
-    void *newptr;
-
     // If size == 0, then free block and return NULL
     if (size == 0) {
         free(ptr);
@@ -1239,23 +1237,51 @@ void *realloc(void *ptr, size_t size) {
         return malloc(size);
     }
 
-    // Otherwise, proceed with reallocation
-    newptr = malloc(size);
+    block_t *block = payload_to_header(ptr);
+    block_t *next = find_next(block);
+    bool alloc_next = get_alloc(next);
+    size_t block_size = get_size(block);
+    size_t copysize, asize;
+    void *newptr;
 
-    // If malloc fails, the original block is left untouched
-    if (newptr == NULL) {
-        return NULL;
+    if (!alloc_next) {
+        block_size += get_size(next);
     }
 
-    // Copy the old data
-    copysize = get_payload_size(block); // gets size of old payload
-    if (size < copysize) {
-        copysize = size;
+    asize = round_up(size + wsize, dsize);
+    if (asize < min_block_size) {
+        asize = min_block_size;
     }
-    memcpy(newptr, ptr, copysize);
 
-    // Free the old block
-    free(ptr);
+    if (block_size < asize) {
+        // start code if not enough space -> alloc new space
+
+        // Otherwise, proceed with reallocation
+        newptr = malloc(size);
+
+        // If malloc fails, the original block is left untouched
+        if (newptr == NULL) {
+            return NULL;
+        }
+        // Copy the old data
+        copysize = get_payload_size(block); // gets size of old payload
+        if (size < copysize) {
+            copysize = size;
+        }
+        memcpy(newptr, ptr, copysize);
+        // Free the old block
+        free(ptr);
+    } else {
+        // otherwies, use current block directly
+        if (!alloc_next) {
+            remove_from_flist(next);
+        }
+
+        write_header(block, block_size, true, get_alloc_prev(block),
+                    get_mini_prev(block));
+        split_block(block, asize);
+        newptr = header_to_payload(block);
+    }
 
     return newptr;
 }
