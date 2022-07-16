@@ -158,7 +158,7 @@ typedef struct block {
 static block_t *heap_start;
 
 /** @brief const number of total seglists */
-enum { LEN = 10 };
+enum { LEN = 3 };
 
 /** @brief Pointer to last free block on the explicit free list */
 static block_t *seglist[LEN];
@@ -586,6 +586,9 @@ static block_t *find_next(block_t *block) {
     dbg_requires(block != NULL);
     dbg_requires(get_size(block) != 0 &&
                  "Called find_next on the last block in the heap");
+    if (block == NULL || get_size(block) == 0) {
+        return NULL;
+    }
     return (block_t *)((char *)block + get_size(block));
 }
 
@@ -593,9 +596,20 @@ static block_t *find_next_fmini(block_t *block) {
     dbg_requires(block != NULL);
     dbg_requires(!get_alloc(block));
     dbg_requires(get_size(block) == min_block_size);
+    if (block == NULL || get_alloc(block) || get_size(block) > min_block_size) {
+        return NULL;
+    }
 
-    block_t *mini = seglist[0];
-
+    int i = 0;
+    block_t *itr = find_next(block);
+    while (itr && i < fcounts[0]) {
+        if (get_size(itr) <= min_block_size) {
+            return itr;
+        }
+        itr = find_next(itr);
+        i++;
+    }
+    return NULL;
 }
 
 /**
@@ -615,6 +629,9 @@ static block_t *find_next_fblock(block_t *block) {
                  "Called find_next_fblock on the last block in the heap");
     dbg_requires(!get_alloc(block) &&
                  "Called find_next_fblock on an allocated block");
+    if (get_size(block) <= min_block_size) {
+        return find_next_fmini(block);
+    }
     return block->data.fblocks.fnext;
 }
 
@@ -1189,7 +1206,7 @@ void free(void *bp) {
     write_footer(block, size, false);
 
     // Try to coalesce the block with its neighbors
-    coalesce_block(block);
+    block = coalesce_block(block);
 
     dbg_ensures(mm_checkheap(__LINE__));
 
