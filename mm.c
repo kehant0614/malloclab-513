@@ -451,18 +451,21 @@ static void add_to_flist(block_t *block) {
 
     int idx = find_seglist(get_size(block));
 
-    if (fcounts[idx] == 1) {
-        seglist[idx]->data.fblocks.fnext = block;
-        seglist[idx]->data.fblocks.fprev = block;
-        block->data.fblocks.fnext = seglist[idx];
-        block->data.fblocks.fprev = seglist[idx];
-    }
-    if (fcounts[idx] > 1) {
-        block_t *temp = seglist[idx]->data.fblocks.fnext;
-        seglist[idx]->data.fblocks.fnext = block;
-        block->data.fblocks.fprev = seglist[idx];
-        block->data.fblocks.fnext = temp;
-        temp->data.fblocks.fprev = block;
+    // skip if it's a mini block
+    if (idx > 0) {
+        if (fcounts[idx] == 1) {
+            seglist[idx]->data.fblocks.fnext = block;
+            seglist[idx]->data.fblocks.fprev = block;
+            block->data.fblocks.fnext = seglist[idx];
+            block->data.fblocks.fprev = seglist[idx];
+        }
+        if (fcounts[idx] > 1) {
+            block_t *temp = seglist[idx]->data.fblocks.fnext;
+            seglist[idx]->data.fblocks.fnext = block;
+            block->data.fblocks.fprev = seglist[idx];
+            block->data.fblocks.fnext = temp;
+            temp->data.fblocks.fprev = block;
+        }
     }
     seglist[idx] = block;
     fcounts[idx]++;
@@ -479,19 +482,22 @@ static void remove_from_flist(block_t *block) {
 
     int idx = find_seglist(get_size(block));
 
-    if (fcounts[idx] == 0) {
-        return;
-    }
-    if (fcounts[idx] == 1) {
-        dbg_requires(block == seglist[idx]);
-        seglist[idx] = NULL;
-    } else {
-        block_t *prev = block->data.fblocks.fprev;
-        block_t *next = block->data.fblocks.fnext;
-        prev->data.fblocks.fnext = next;
-        next->data.fblocks.fprev = prev;
-        if (seglist[idx] == block) {
-            seglist[idx] = next;
+    // skip if it's a mini block
+    if (idx > 0) {
+        if (fcounts[idx] == 0) {
+            return;
+        }
+        if (fcounts[idx] == 1) {
+            dbg_requires(block == seglist[idx]);
+            seglist[idx] = NULL;
+        } else {
+            block_t *prev = block->data.fblocks.fprev;
+            block_t *next = block->data.fblocks.fnext;
+            prev->data.fblocks.fnext = next;
+            next->data.fblocks.fprev = prev;
+            if (seglist[idx] == block) {
+                seglist[idx] = next;
+            }
         }
     }
     fcounts[idx]--;
@@ -583,6 +589,15 @@ static block_t *find_next(block_t *block) {
     return (block_t *)((char *)block + get_size(block));
 }
 
+static block_t *find_next_fmini(block_t *block) {
+    dbg_requires(block != NULL);
+    dbg_requires(!get_alloc(block));
+    dbg_requires(get_size(block) == min_block_size);
+
+    block_t *mini = seglist[0];
+
+}
+
 /**
  * @brief Finds the next consecutive block on the explicit free list.
  *
@@ -635,7 +650,6 @@ static word_t *find_prev_footer(block_t *block) {
 }
 
 static block_t *find_mini_prev(block_t *block) {
-    dbg_requires(get_size(block) <= min_block_size);
     return (block_t *)((char *)block - min_block_size);
 }
 
@@ -692,9 +706,12 @@ static void pheap() {
         int idx = 0;
         for (block = heap_start; get_size(block) != 0;
              block = find_next(block)) {
-            printf("block: %d: %s, size: %zu,   \taddr: %p\n", idx++,
+            word_t *footer = header_to_footer(block);
+            printf("block: %d: %s, size: %zu,   \taddr: %p [footer: %s, size: %zu]\n", idx++,
                    get_alloc(block) ? "a" : "f", get_size(block),
-                   (void *)block);
+                   (void *)block,
+                   extract_alloc(*footer) ? "a" : "f",
+                   extract_size(*footer));
         }
         printf("\n");
     }
@@ -780,6 +797,7 @@ static block_t *coalesce_block(block_t *block) {
         // add_to_flist(block);
         write_header(block, block_size, false,
                     get_alloc_prev(block), get_mini_prev(block));
+        write_footer(block, block_size, false);
         add_to_flist(block);
     }
 
@@ -975,7 +993,7 @@ static bool block_ck(block_t *block) {
      */
 
     // check 3.
-    if (!get_alloc(block)) {
+    if (!get_alloc(block) && get_size(block) > min_block_size) {
         word_t *footer = header_to_footer(block);
         if (extract_size(block->header) != extract_size(*footer)) {
             fprintf(stderr,
@@ -1140,8 +1158,8 @@ void *malloc(size_t size) {
     bp = header_to_payload(block);
 
     // DEBUG: print heap and free_list
-    // pheap();
-    // pfl();
+    pheap();
+    pfl();
 
     dbg_ensures(mm_checkheap(__LINE__));
     return bp;
@@ -1176,8 +1194,8 @@ void free(void *bp) {
     dbg_ensures(mm_checkheap(__LINE__));
 
     // DEBUG: print heap and free_list
-    // pheap();
-    // pfl();
+    pheap();
+    pfl();
 }
 
 /**
