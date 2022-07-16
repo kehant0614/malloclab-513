@@ -158,7 +158,7 @@ typedef struct block {
 static block_t *heap_start = NULL;
 
 /** @brief const number of total seglists */
-enum { LEN = 3 };
+enum { LEN = 10 };
 
 /** @brief Pointer to last free block on the explicit free list */
 static block_t *seglist[LEN];
@@ -400,7 +400,7 @@ static block_t *footer_to_header(word_t *footer) {
  */
 static size_t get_payload_size(block_t *block) {
     size_t asize = get_size(block);
-    return asize - dsize;
+    return asize - wsize;
 }
 
 /**
@@ -438,6 +438,71 @@ static int find_seglist(size_t size) {
 }
 
 /**
+ * @brief Finds the next consecutive block on the explicit free list.
+ *
+ * This function accesses the next free block on the heap by following
+ * the fnext pointer stored on current block.
+ *
+ * @param[in] block A block in the heap
+ * @return The next consecutive free block on the heap
+ * @pre The block is not the epilogue
+ * @pre The block is a free block
+ */
+static block_t *find_next_fblock(block_t *block) {
+    dbg_requires(block != NULL);
+    dbg_requires(get_size(block) != 0 &&
+                 "Called find_next_fblock on the last block in the heap");
+    // dbg_requires(!get_alloc(block) &&
+    //              "Called find_next_fblock on an allocated block");
+    return block->data.fblocks.fnext;
+}
+
+static block_t *find_prev_fmini(block_t *block) {
+    dbg_requires(block != NULL);
+    dbg_requires(get_size(block) == min_block_size);
+    if (block == NULL || get_alloc(block) || get_size(block) > min_block_size) {
+        return NULL;
+    }
+
+    block_t *prev_block = NULL;
+    block_t *itr = seglist[0];
+    int i = 0;
+    while (i < fcounts[0]) {
+        if (itr == block) {
+            return prev_block;
+        }
+        prev_block = itr;
+        itr = find_next_fblock(itr);
+        i++;
+    }
+    
+    return NULL;
+}
+
+/**
+ * @brief Finds the previous consecutive block on the explicit free list.
+ *
+ * This function accesses the previous free block on the heap by following
+ * the fprev pointer stored on current block.
+ *
+ * @param[in] block A block in the heap
+ * @return The previous consecutive free block on the heap
+ * @pre The block is not the epilogue
+ * @pre The block is a free block
+ */
+static block_t *find_prev_fblock(block_t *block) {
+    dbg_requires(block != NULL);
+    dbg_requires(get_size(block) != 0 &&
+                 "Called find_prev_fblock on the last block in the heap");
+    // dbg_requires(!get_alloc(block) &&
+    //              "Called find_prev_fblock on an allocated block");
+    if (get_size(block) <= min_block_size) {
+        return find_prev_fmini(block);
+    }
+    return block->data.fblocks.fprev;
+}
+
+/**
  * @brief Add the block to explicit free list
  *
  * @param[out] block the block to be added
@@ -451,19 +516,20 @@ static void add_to_flist(block_t *block) {
 
     int idx = find_seglist(get_size(block));
 
-    // skip if it's a mini block
-    if (idx > 0) {
-        if (fcounts[idx] == 1) {
-            seglist[idx]->data.fblocks.fnext = block;
+    if (fcounts[idx] == 1) {
+        block->data.fblocks.fnext = seglist[idx];
+        seglist[idx]->data.fblocks.fnext = block;
+        if (idx > 0) {
             seglist[idx]->data.fblocks.fprev = block;
-            block->data.fblocks.fnext = seglist[idx];
             block->data.fblocks.fprev = seglist[idx];
         }
-        if (fcounts[idx] > 1) {
-            block_t *temp = seglist[idx]->data.fblocks.fnext;
-            seglist[idx]->data.fblocks.fnext = block;
+    }
+    if (fcounts[idx] > 1) {
+        block_t *temp = seglist[idx]->data.fblocks.fnext;
+        block->data.fblocks.fnext = temp;
+        seglist[idx]->data.fblocks.fnext = block;
+        if (idx > 0) {
             block->data.fblocks.fprev = seglist[idx];
-            block->data.fblocks.fnext = temp;
             temp->data.fblocks.fprev = block;
         }
     }
@@ -482,22 +548,27 @@ static void remove_from_flist(block_t *block) {
 
     int idx = find_seglist(get_size(block));
 
-    // skip if it's a mini block
-    if (idx > 0) {
-        if (fcounts[idx] == 0) {
-            return;
-        }
-        if (fcounts[idx] == 1) {
-            dbg_requires(block == seglist[idx]);
-            seglist[idx] = NULL;
+    if (fcounts[idx] == 0) {
+        return;
+    }
+    if (fcounts[idx] == 1) {
+        dbg_requires(block == seglist[idx]);
+        seglist[idx] = NULL;
+    } else {
+        block_t *prev = find_prev_fblock(block);
+        block_t *next = find_next_fblock(block);
+        if (idx == 0) {
+            if (prev) {
+                prev->data.fblocks.fnext = next;
+            } else {
+                next->data.fblocks.fnext = next;
+            }
         } else {
-            block_t *prev = block->data.fblocks.fprev;
-            block_t *next = block->data.fblocks.fnext;
             prev->data.fblocks.fnext = next;
             next->data.fblocks.fprev = prev;
-            if (seglist[idx] == block) {
-                seglist[idx] = next;
-            }
+        }
+        if (seglist[idx] == block) {
+            seglist[idx] = next;
         }
     }
     fcounts[idx]--;
@@ -550,16 +621,10 @@ static void write_header(block_t *block, size_t size, bool alloc,
     // dbg_requires(size >= min_block_size);
 
     block->header = pack(size, alloc, alloc_prev, mini_prev);
-
-    // if (size > min_block_size) {
-    //     word_t *footerp = header_to_footer(block);
-    //     *footerp = pack(size, alloc, false, false);
-    // }
 }
 
 static void write_footer(block_t *block, size_t size, bool alloc) {
     dbg_requires(block != NULL);
-    // dbg_requires(size > 0);
 
     // Conditions
     dbg_requires((char *)block < (char *)mem_heap_hi() - 7);
@@ -591,71 +656,6 @@ static block_t *find_next(block_t *block) {
         return NULL;
     }
     return (block_t *)((char *)block + get_size(block));
-}
-
-static block_t *find_next_fmini(block_t *block) {
-    dbg_requires(block != NULL);
-    dbg_requires(!get_alloc(block));
-    dbg_requires(get_size(block) == min_block_size);
-    if (block == NULL || get_alloc(block) || get_size(block) > min_block_size) {
-        return NULL;
-    }
-
-    block_t *prev_block = NULL;
-    block_t *itr = seglist[0];
-    while (itr) {
-        if (itr == block) {
-            return prev_block;
-        }
-        prev_block = itr;
-        itr = find_next(itr);
-    }
-    
-    return NULL;
-}
-
-/**
- * @brief Finds the next consecutive block on the explicit free list.
- *
- * This function accesses the next free block on the heap by following
- * the fnext pointer stored on current block.
- *
- * @param[in] block A block in the heap
- * @return The next consecutive free block on the heap
- * @pre The block is not the epilogue
- * @pre The block is a free block
- */
-static block_t *find_next_fblock(block_t *block) {
-    dbg_requires(block != NULL);
-    dbg_requires(get_size(block) != 0 &&
-                 "Called find_next_fblock on the last block in the heap");
-    dbg_requires(!get_alloc(block) &&
-                 "Called find_next_fblock on an allocated block");
-    if (get_size(block) <= min_block_size) {
-        return find_next_fmini(block);
-    }
-    return block->data.fblocks.fnext;
-}
-
-/**
- * @brief Finds the previous consecutive block on the explicit free list.
- *
- * This function accesses the previous free block on the heap by following
- * the fprev pointer stored on current block.
- *
- * @param[in] block A block in the heap
- * @return The previous consecutive free block on the heap
- * @pre The block is not the epilogue
- * @pre The block is a free block
- */
-static block_t *find_prev_fblock(block_t *block) {
-    dbg_requires(block != NULL);
-    dbg_requires(get_size(block) != 0 &&
-                 "Called find_prev_fblock on the last block in the heap");
-    dbg_requires(!get_alloc(block) &&
-                 "Called find_prev_fblock on an allocated block");
-    // return (block_t *)block->data.fblocks.fprev;
-    return block->data.fblocks.fprev;
 }
 
 /**
@@ -1176,8 +1176,8 @@ void *malloc(size_t size) {
     bp = header_to_payload(block);
 
     // DEBUG: print heap and free_list
-    // pheap();
-    // pfl();
+    pheap();
+    pfl();
 
     dbg_ensures(mm_checkheap(__LINE__));
     return bp;
@@ -1213,8 +1213,8 @@ void free(void *bp) {
     dbg_ensures(mm_checkheap(__LINE__));
 
     // DEBUG: print heap and free_list
-    // pheap();
-    // pfl();
+    pheap();
+    pfl();
 }
 
 /**
